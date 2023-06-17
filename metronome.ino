@@ -4,43 +4,31 @@
 #include <Arduino_CRC32.h>
 #include <FlashStorage.h>
 
+// Version number reported by CLI
 #define METRONOME_SKETCH_VERSION "0.0.1"
 
 // If 0, no log messages will be sent to the UART, and CLI will not be available
-#define ENABLE_UART          (1u)
+#define ENABLE_UART             (1u)
 
 // Only used for debugging, useful if testing something unrelated to
 // preset storage and want to avoid wasting flash write cycles
-#define ENABLE_FLASH_WRITE   (0u)
+#define ENABLE_FLASH_WRITE      (0u)
 
-// Max. number of characters for a preset name string
-#define MAX_PRESET_NAME_LEN  (32u)
-
-// Max. number of presets that can be saved in flash
-#define MAX_PRESET_COUNT     (128u)
-
-// Button debounce time, milliseconds
-#define BUTTON_DEBOUNCE_MS   (100u)
-
-#define MIN_BPM              (1u)
-#define MAX_BPM              (512u)
-#define MAX_BEAT             (8u)
-#define MIN_BEAT             (1u)
-
-// Calculate the time in milliseconds for a single beat, based on BPM
-#define BPM_TO_BEAT_TIME_MS(bpm) ((unsigned long) (60.0f / ((float) (bpm)) * 1000.0f))
-
-// Checks if character is space or tab
-#define IS_SPACE(c) ((c == ' ') || (c == '\t'))
-
+#define MAX_PRESET_NAME_LEN     (32u)   // Max. number of characters for a preset name string
+#define MAX_PRESET_COUNT        (128u)  // Max. number of presets that can be saved in flash
+#define BUTTON_DEBOUNCE_MS      (100u)  // Button debounce time, milliseconds
+#define MIN_BPM                 (1u)    // Min. allowed BPM value
+#define MAX_BPM                 (512u)  // Max. allowed BPM value
+#define MIN_BEAT                (1u)    // Min. allowed beat value
+#define MAX_BEAT                (8u)    // Max. allowed beat value
 
 // Actual system core clock freq for Arduino Zero
 // (taken from https://github.com/manitou48/crystals/blob/master/crystals.txt)
-#define TRUE_CORE_CLOCK_HZ (47972352UL)
-//#define TRUE_CORE_CLOCK_HZ (48300000)
+#define TRUE_CORE_CLOCK_HZ      (47972352UL)
 
-// TC4 counter frequency in HZ, accounting for selected divisor of 16
-#define TC4_HZ (TRUE_CORE_CLOCK_HZ / 16UL)
+
+// Checks if character is space or tab
+#define IS_SPACE(c) ((c == ' ') || (c == '\t'))
 
 
 // Enumerates all states the metronome can be in, button inputs
@@ -51,7 +39,6 @@ typedef enum
     STATE_PRESET,            // Preset playback mode
     STATE_PRESET_NAME_ENTRY  // Preset name entry mode
 } metronome_state_e;
-
 
 // Enumerates all buttons
 typedef enum
@@ -132,6 +119,7 @@ static void _add_del_cmd_handler(char *cmd_args);
 // Number of CLI commands we can handle (must be manually synced with _cli_commands)
 #define CLI_COMMAND_COUNT (8u)
 
+// Table mapping CLI command words to command handlers
 static cli_command_t _cli_commands[CLI_COMMAND_COUNT] =
 {
     {"help", _help_cmd_handler},
@@ -186,9 +174,9 @@ static volatile bool _preset_change_requested = false;
 // Table of alphanumeric characters, used for preset name entry
 static char _alphanum_table[3][20] =
 {
-    {'\0', '\0', 'q',  'w',  'e',  'r',  't',  'y',  'u',  'i',  'o',  'p',  '\0', '1',  '2',  '3',  '4',  '\0', '\0', '\0'},
-    {'\0', '\0', 'a',  's',  'd',  'f',  'g',  'h',  'j',  'k',  'l',  '_',  '\0', '5',  '6',  '7',  '8',  '\0', '\0', '\0'},
-    {'\0', '\0', '\0', 'z',  'x',  'c',  'v',  'b',  'n',  'm',  '\0', '<',  '\0', '\0', '9',  '0',  '\0', '\0', '\0', '\0'},
+    {' ', ' ', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', ' ', '1', '2', '3', '4', ' ', ' ', ' '},
+    {' ', ' ', 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', '_', ' ', '5', '6', '7', '8', ' ', ' ', ' '},
+    {' ', ' ', ' ', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ' ', '<', ' ', ' ', '9', '0', ' ', ' ', ' ', ' '},
 };
 
 
@@ -200,8 +188,10 @@ static char _alphanum_table[3][20] =
 #define LOG_ERROR(fmt, ...) {}
 #endif // ENABLE_UART
 
-
+// CRC generator, used to generate CRCs for preset data in flash
 Arduino_CRC32 crc_generator;
+
+// Flash storage object for preset saving
 FlashStorage(preset_store, metronome_presets_t);
 
 
@@ -440,12 +430,6 @@ static void _stream_subbeat_sound()
     // TODO: implement
 }
 
-// Schedule timer interrupt to fire at a specific absolute time in milliseconds
-static void _schedule_next_beat(void (*callback)(void), unsigned long beat_time_ms)
-{
-    // TODO: implement
-}
-
 void _start_streaming_next_beat(void)
 {
     unsigned long now = millis();
@@ -475,10 +459,7 @@ void _start_streaming_next_beat(void)
     {
         _current_beat += 1u;
     }
-
-    _schedule_next_beat(_start_streaming_next_beat, now + BPM_TO_BEAT_TIME_MS(_current_bpm));
 }
-
 
 // Wait for TC4 to be not busy
 bool _tc4_syncing(void)
@@ -528,7 +509,7 @@ static void _stop_metronome(void)
 }
 
 // Change TC4 counter period, stops timer first if needed
-void _tc4_set_period(uint32_t period_us)
+void _tc4_set_period(unsigned int bpm)
 {
     // Stop timer/counter, if runnning
     bool timer_was_running = false;
@@ -539,7 +520,8 @@ void _tc4_set_period(uint32_t period_us)
     }
 
     // Set new period
-    TC4->COUNT32.CC[0].reg = period_us * 48u;
+    TC4->COUNT32.CC[0].reg = (TRUE_CORE_CLOCK_HZ * 60UL) / bpm;
+
     while (_tc4_syncing());
 
     if (timer_was_running)
@@ -599,7 +581,7 @@ static bool _handle_metronome_inputs(void)
             lcd_update_required = true;
             _current_bpm += 1u;
             LOG_INFO("%u BPM", _current_bpm);
-            _tc4_set_period(60000000u / _current_bpm);
+            _tc4_set_period(_current_bpm);
         }
 
         _buttons[BUTTON_UP].pressed = false;
@@ -612,7 +594,7 @@ static bool _handle_metronome_inputs(void)
             lcd_update_required = true;
             _current_bpm -= 1u;
             LOG_INFO("%u BPM", _current_bpm);
-            _tc4_set_period(60000000u / _current_bpm);
+            _tc4_set_period(_current_bpm);
         }
 
         _buttons[BUTTON_DOWN].pressed = false;
@@ -867,9 +849,6 @@ void setup()
     // Counting at 3MHz
     TC4->COUNT32.CTRLA.reg |= TC_CTRLA_PRESCALER_DIV1;
 
-    // Set counter to count up to TC4_HZ (1 second)
-    TC4->COUNT32.CC[0].reg = TC4_HZ;
-    while (_tc4_syncing());
 
     // Configure IRQ for TC4
     NVIC_DisableIRQ(TC4_IRQn);
@@ -882,7 +861,7 @@ void setup()
     while (_tc4_syncing());
 
     // Set timer period based on starting BPM
-    _tc4_set_period(60000000u / _current_bpm);
+    _tc4_set_period(_current_bpm);
 
     Serial.begin(115200);
 
