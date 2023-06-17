@@ -4,6 +4,8 @@
 #include <Arduino_CRC32.h>
 #include <FlashStorage.h>
 
+#define METRONOME_SKETCH_VERSION "0.0.1"
+
 // If 0, no log messages will be sent to the UART, and CLI will not be available
 #define ENABLE_UART          (1u)
 
@@ -15,17 +17,15 @@
 #define MAX_PRESET_NAME_LEN  (32u)
 
 // Max. number of presets that can be saved in flash
-#define MAX_PRESET_COUNT     (256u)
+#define MAX_PRESET_COUNT     (128u)
 
 // Button debounce time, milliseconds
 #define BUTTON_DEBOUNCE_MS   (100u)
 
 #define MIN_BPM              (1u)
-#define MAX_BPM              (256u)
+#define MAX_BPM              (512u)
 #define MAX_BEAT             (8u)
 #define MIN_BEAT             (1u)
-
-
 
 // Calculate the time in milliseconds for a single beat, based on BPM
 #define BPM_TO_BEAT_TIME_MS(bpm) ((unsigned long) (60.0f / ((float) (bpm)) * 1000.0f))
@@ -36,8 +36,8 @@
 
 // Actual system core clock freq for Arduino Zero
 // (taken from https://github.com/manitou48/crystals/blob/master/crystals.txt)
-//#define TRUE_CORE_CLOCK_HZ (47972352UL)
-#define TRUE_CORE_CLOCK_HZ (48300000)
+#define TRUE_CORE_CLOCK_HZ (47972352UL)
+//#define TRUE_CORE_CLOCK_HZ (48300000)
 
 // TC4 counter frequency in HZ, accounting for selected divisor of 16
 #define TC4_HZ (TRUE_CORE_CLOCK_HZ / 16UL)
@@ -69,9 +69,9 @@ typedef enum
 // Holds all data for a single metronome preset
 typedef struct
 {
-    // Bits 0 through 7: BPM, 0-255 representing 1-256BPM
-    // Bits 8 through 10: beat count, 0-7 representing 1-8 beats
-    // Bits 11 through 15: reserved
+    // Bits 0 through 9: BPM, 0-511 representing 1-512BPM
+    // Bits 9 through 11: beat count, 0-7 representing 1-8 beats
+    // Bits 12 through 15: reserved
     uint16_t settings;
 
     // Preset name, null-terminated
@@ -223,34 +223,6 @@ void _select_button_callback(void) { _gpio_callback(BUTTON_SELECT); }
 void _mode_button_callback(void) { _gpio_callback(BUTTON_MODE); }
 void _add_delete_button_callback(void) { _gpio_callback(BUTTON_ADD_DELETE); }
 
-// Helper function to change state and log the transition
-void _state_transition(metronome_state_e new_state)
-{
-    const char *statename = "";
-    switch(new_state)
-    {
-        case STATE_METRONOME:
-            statename = "METRONOME";
-            break;
-        case STATE_PRESET:
-            statename = "PRESET";
-            break;
-        case STATE_PRESET_NAME_ENTRY:
-            statename = "PRESET_NAME_ENTRY";
-            break;
-    }
-    LOG_INFO("changing to state %s", statename);
-
-    // Reset all button states
-    for (unsigned int i = 0u; i < BUTTON_COUNT; i++)
-    {
-        _buttons[i].pressed = false;
-        _buttons[i].state = DEBOUNCE_IDLE;
-    }
-
-    // Update state value
-    _current_state = new_state;
-}
 
 #if ENABLE_UART
 // Formats and prints a debug message to the UART
@@ -276,6 +248,8 @@ static void log(const char *level, const char *func, int line, char *fmt, ...)
 void _help_cmd_handler(char *cmd_args)
 {
     Serial.println("-------- CLI command reference ---------");
+    Serial.print("Version ");
+    Serial.println(METRONOME_SKETCH_VERSION);
     Serial.println("help   - Show this printout");
     Serial.println("u      - Inject UP button press");
     Serial.println("d      - Inject DOWN button press");
@@ -423,14 +397,14 @@ static bool _save_preset(uint16_t *preset)
         return false;
     }
 
-    *preset = ((_current_bpm - 1u) & 0xFFu) | (((_current_beat_count - 1u) & 0x7u) << 0x8u);
+    *preset = ((_current_bpm - 1u) & 0x1FFu) | (((_current_beat_count - 1u) & 0x7u) << 0x9u);
 }
 
 // Populate current BPM and beat count from a saved preset slot
 static void _load_preset(uint16_t *preset)
 {
-    _current_bpm = ((*preset) & 0xFFu) + 1u;
-    _current_beat_count = (((*preset) >> 8u) & 0x7u) + 1u;
+    _current_bpm = ((*preset) & 0x1FFu) + 1u;
+    _current_beat_count = (((*preset) >> 9u) & 0x7u) + 1u;
 }
 
 // Draw current state to character LCD, based on current state
@@ -565,7 +539,7 @@ void _tc4_set_period(uint32_t period_us)
     }
 
     // Set new period
-    TC4->COUNT32.CC[0].reg = period_us * 3u;
+    TC4->COUNT32.CC[0].reg = period_us * 48u;
     while (_tc4_syncing());
 
     if (timer_was_running)
@@ -579,6 +553,38 @@ void _tc4_set_period(uint32_t period_us)
 // Display "no more room for presets" message and wait 2s
 static void _max_preset_count_exceeded(void)
 {
+}
+
+// Helper function to change state and log the transition
+void _state_transition(metronome_state_e new_state)
+{
+    const char *statename = "";
+    switch(new_state)
+    {
+        case STATE_METRONOME:
+            statename = "METRONOME";
+            break;
+        case STATE_PRESET:
+            statename = "PRESET";
+            break;
+        case STATE_PRESET_NAME_ENTRY:
+            statename = "PRESET_NAME_ENTRY";
+            break;
+    }
+    LOG_INFO("changing to state %s", statename);
+
+    // Stop metronome timer/counter
+    _stop_metronome();
+
+    // Reset all button states
+    for (unsigned int i = 0u; i < BUTTON_COUNT; i++)
+    {
+        _buttons[i].pressed = false;
+        _buttons[i].state = DEBOUNCE_IDLE;
+    }
+
+    // Update state value
+    _current_state = new_state;
 }
 
 // Handle button inputs in "metronome" mode
@@ -859,7 +865,7 @@ void setup()
     TC4->COUNT32.CTRLA.reg |= TC_CTRLA_MODE_COUNT32;
     TC4->COUNT32.CTRLA.reg |= TC_CTRLA_WAVEGEN_MFRQ;
     // Counting at 3MHz
-    TC4->COUNT32.CTRLA.reg |= TC_CTRLA_PRESCALER_DIV16;
+    TC4->COUNT32.CTRLA.reg |= TC_CTRLA_PRESCALER_DIV1;
 
     // Set counter to count up to TC4_HZ (1 second)
     TC4->COUNT32.CC[0].reg = TC4_HZ;
@@ -880,7 +886,7 @@ void setup()
 
     Serial.begin(115200);
 
-    LOG_INFO("power on");
+    LOG_INFO("Version "METRONOME_SKETCH_VERSION);
     LOG_INFO("preset store is %u bytes", sizeof(_presets));
     LOG_INFO("flash writes %s", (ENABLE_FLASH_WRITE) ? "enabled" : "disabled");
 
