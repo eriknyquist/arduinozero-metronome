@@ -34,6 +34,15 @@
 #define IS_SPACE(c) ((c == ' ') || (c == '\t'))
 
 
+// Actual system core clock freq for Arduino Zero
+// (taken from https://github.com/manitou48/crystals/blob/master/crystals.txt)
+//#define TRUE_CORE_CLOCK_HZ (47972352UL)
+#define TRUE_CORE_CLOCK_HZ (48300000)
+
+// TC4 counter frequency in HZ, accounting for selected divisor of 16
+#define TC4_HZ (TRUE_CORE_CLOCK_HZ / 16UL)
+
+
 // Enumerates all states the metronome can be in, button inputs
 // mean different things for each of these states.
 typedef enum
@@ -145,11 +154,11 @@ static unsigned int _cli_buf_pos = 0u;
 static metronome_presets_t _presets;
 
 // State tracking/debouncing for all buttons
-static volatile button_info_t _buttons[BUTTON_COUNT] = 
+static volatile button_info_t _buttons[BUTTON_COUNT] =
 {
     {false, LOW, DEBOUNCE_IDLE, 0u, 11},  // BUTTON_UP
     {false, LOW, DEBOUNCE_IDLE, 0u, 12},  // BUTTON_DOWN
-    {false, LOW, DEBOUNCE_IDLE, 0u, 13},  // BUTTON_LEFT
+    {false, LOW, DEBOUNCE_IDLE, 0u, 10},  // BUTTON_LEFT
     {false, LOW, DEBOUNCE_IDLE, 0u, 14},  // BUTTON_RIGHT
     {false, LOW, DEBOUNCE_IDLE, 0u, 15},  // BUTTON_SELECT
     {false, LOW, DEBOUNCE_IDLE, 0u, 16},  // BUTTON_MODE
@@ -467,7 +476,7 @@ void _start_streaming_next_beat(void)
 {
     unsigned long now = millis();
 
-    if (0u == _current_beat)
+    if (1u == _current_beat)
     {
         // First beat of bar, check if preset change was requested
         if (_preset_change_requested)
@@ -484,9 +493,9 @@ void _start_streaming_next_beat(void)
         _stream_subbeat_sound();
     }
 
-    if ((_current_beat_count - 1) == _current_beat)
+    if (_current_beat_count == _current_beat)
     {
-        _current_beat = 0u;
+        _current_beat = 1u;
     }
     else
     {
@@ -496,34 +505,80 @@ void _start_streaming_next_beat(void)
     _schedule_next_beat(_start_streaming_next_beat, now + BPM_TO_BEAT_TIME_MS(_current_bpm));
 }
 
+
+// Wait for TC4 to be not busy
+bool _tc4_syncing(void)
+{
+    return TC4->COUNT32.STATUS.reg & TC_STATUS_SYNCBUSY;
+}
+
+// Reset (stop) TC4 timer
+void _tc4_reset(void)
+{
+    TC4->COUNT32.CTRLA.reg = TC_CTRLA_SWRST;
+    while (_tc4_syncing());
+    while (TC4->COUNT32.CTRLA.bit.SWRST);
+}
+
+void TC4_Handler(void)
+{
+    digitalWrite(13, !digitalRead(13));
+    TC4->COUNT32.INTFLAG.bit.MC0 = 1; //Writing a 1 to INTFLAG.bit.MC0 clears the interrupt so that it will run again
+}
+
 // Start metronome with current settings (enable timer interrupt)
 static void _start_metronome(void)
 {
-    if (_metronome_running)
-    {
-        return;
-    }
+    LOG_INFO("starting metronome");
 
-    _current_beat = 0u;
-    _metronome_running = true;
-    _start_streaming_next_beat();
+    // Start timer/counter, if runnning
+    if ((TC4->COUNT32.CTRLA.reg & TC_CTRLA_ENABLE) == 0u)
+    {
+        TC4->COUNT32.CTRLA.reg |= TC_CTRLA_ENABLE;
+        _metronome_running = true;
+    }
 }
 
 // Stop metronome (disable timer interrupt)
 static void _stop_metronome(void)
 {
-    if (!_metronome_running)
-    {
-        return;
-    }
+    LOG_INFO("stopping metronome");
 
-    _metronome_running = false;
-    // TODO: stop timer
+    // Start timer/counter, if runnning
+    if ((TC4->COUNT32.CTRLA.reg & TC_CTRLA_ENABLE) > 0u)
+    {
+        TC4->COUNT32.CTRLA.reg &= ~TC_CTRLA_ENABLE;
+        _metronome_running = false;
+
+    }
 }
 
+// Change TC4 counter period, stops timer first if needed
+void _tc4_set_period(uint32_t period_us)
+{
+    // Stop timer/counter, if runnning
+    bool timer_was_running = false;
+    if ((TC4->COUNT32.CTRLA.reg & TC_CTRLA_ENABLE) > 0u)
+    {
+        TC4->COUNT32.CTRLA.reg &= ~TC_CTRLA_ENABLE;
+        timer_was_running = true;
+    }
+
+    // Set new period
+    TC4->COUNT32.CC[0].reg = period_us * 3u;
+    while (_tc4_syncing());
+
+    if (timer_was_running)
+    {
+        // Re-start timer/counter
+        TC4->COUNT32.CTRLA.reg |= TC_CTRLA_ENABLE;
+        while (_tc4_syncing());
+    }
+}
+
+// Display "no more room for presets" message and wait 2s
 static void _max_preset_count_exceeded(void)
 {
-    // Display "no more room for presets" message and wait 2s
 }
 
 // Handle button inputs in "metronome" mode
@@ -537,6 +592,8 @@ static bool _handle_metronome_inputs(void)
         {
             lcd_update_required = true;
             _current_bpm += 1u;
+            LOG_INFO("%u BPM", _current_bpm);
+            _tc4_set_period(60000000u / _current_bpm);
         }
 
         _buttons[BUTTON_UP].pressed = false;
@@ -548,6 +605,8 @@ static bool _handle_metronome_inputs(void)
         {
             lcd_update_required = true;
             _current_bpm -= 1u;
+            LOG_INFO("%u BPM", _current_bpm);
+            _tc4_set_period(60000000u / _current_bpm);
         }
 
         _buttons[BUTTON_DOWN].pressed = false;
@@ -564,6 +623,7 @@ static bool _handle_metronome_inputs(void)
             _current_beat_count -= 1u;
         }
 
+        LOG_INFO("%u beats", _current_beat_count);
         lcd_update_required = true;
         _buttons[BUTTON_LEFT].pressed = false;
     }
@@ -579,6 +639,7 @@ static bool _handle_metronome_inputs(void)
             _current_beat_count += 1u;
         }
 
+        LOG_INFO("%u beats", _current_beat_count);
         lcd_update_required = true;
         _buttons[BUTTON_RIGHT].pressed = false;
     }
@@ -696,7 +757,15 @@ static bool _handle_preset_inputs(void)
 // Handle button inputs in "preset name entry" mode
 static bool _handle_name_entry_inputs(void)
 {
-    return false;
+    bool lcd_update_required = false;
+    if (_buttons[BUTTON_MODE].pressed || _buttons[BUTTON_ADD_DELETE].pressed)
+    {
+        // Switch to metronome state (also clears button states)
+        _state_transition(STATE_METRONOME);
+        lcd_update_required = true;
+    }
+
+    return lcd_update_required;
 }
 
 // Calls the correct input handler function based on current mode.
@@ -769,16 +838,45 @@ static bool _handle_inputs(void)
     return false;
 }
 
+
 void setup()
 {
+
     // Required for snprintf to support floats :(
     asm(".global _printf_float");
+    pinMode(13, OUTPUT);
 
     // Configure button input pins
     for (unsigned int i = 0u; i < BUTTON_COUNT; i++)
     {
         pinMode(_buttons[i].gpio_pin, INPUT);
     }
+
+    // Configure TC4 to generate interrupts for metronome beat
+    GCLK->CLKCTRL.reg = (uint16_t) (GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_GEN_GCLK0 | GCLK_CLKCTRL_ID(GCM_TC4_TC5)) ;
+    while (GCLK->STATUS.bit.SYNCBUSY);
+    _tc4_reset();
+    TC4->COUNT32.CTRLA.reg |= TC_CTRLA_MODE_COUNT32;
+    TC4->COUNT32.CTRLA.reg |= TC_CTRLA_WAVEGEN_MFRQ;
+    // Counting at 3MHz
+    TC4->COUNT32.CTRLA.reg |= TC_CTRLA_PRESCALER_DIV16;
+
+    // Set counter to count up to TC4_HZ (1 second)
+    TC4->COUNT32.CC[0].reg = TC4_HZ;
+    while (_tc4_syncing());
+
+    // Configure IRQ for TC4
+    NVIC_DisableIRQ(TC4_IRQn);
+    NVIC_ClearPendingIRQ(TC4_IRQn);
+    NVIC_SetPriority(TC4_IRQn, 0);
+    NVIC_EnableIRQ(TC4_IRQn);
+
+    // Enable TC4 interrupt request
+    TC4->COUNT32.INTENSET.bit.MC0 = 1;
+    while (_tc4_syncing());
+
+    // Set timer period based on starting BPM
+    _tc4_set_period(60000000u / _current_bpm);
 
     Serial.begin(115200);
 
