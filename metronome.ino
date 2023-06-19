@@ -1,4 +1,3 @@
-
 #include <stdarg.h>
 
 #include <Arduino_CRC32.h>
@@ -7,8 +6,11 @@
 // Version number reported by CLI
 #define METRONOME_SKETCH_VERSION "0.0.1"
 
-// If 0, no log messages will be sent to the UART, and CLI will not be available
-#define ENABLE_UART             (1u)
+// If 0, no log messages will be sent to the UART
+#define ENABLE_UART_LOGGING     (1u)
+
+// If 0, CLI interface will not be available
+#define ENABLE_UART_CLI         (0u)
 
 // Only used for debugging, useful if testing something unrelated to
 // preset storage and want to avoid wasting flash write cycles
@@ -113,10 +115,11 @@ typedef struct
     int pressed_state;      // GPIO value that represents a pressed button
     debounce_state_e state;  // Current debounce state
     unsigned long start_ms;  // Debounce start time, milliseconds
+    void (*callback)(void);  // Interrupt handler
     int gpio_pin;            // GPIO pin number for button
 } button_info_t;
 
-#if ENABLE_UART
+#if ENABLE_UART_CLI
 // Holds all data required to handle a CLI command
 typedef struct
 {
@@ -125,6 +128,7 @@ typedef struct
 } cli_command_t;
 
 // Forward declaration of CLI command handlers
+static void _presets_cmd_handler(char *cmd_args);
 static void _help_cmd_handler(char *cmd_args);
 static void _up_cmd_handler(char *cmd_args);
 static void _down_cmd_handler(char *cmd_args);
@@ -136,12 +140,13 @@ static void _add_del_cmd_handler(char *cmd_args);
 
 
 // Number of CLI commands we can handle (must be manually synced with _cli_commands)
-#define CLI_COMMAND_COUNT (8u)
+#define CLI_COMMAND_COUNT (9u)
 
 // Table mapping CLI command words to command handlers
 static cli_command_t _cli_commands[CLI_COMMAND_COUNT] =
 {
     {"help", _help_cmd_handler},
+    {"presets", _presets_cmd_handler},
     {"u", _up_cmd_handler},
     {"d", _down_cmd_handler},
     {"l", _left_cmd_handler},
@@ -154,22 +159,33 @@ static cli_command_t _cli_commands[CLI_COMMAND_COUNT] =
 // Serial input buffer for CLI commands
 static char _cli_buf[64u];
 static unsigned int _cli_buf_pos = 0u;
-#endif // ENABLE_UART
+#endif // ENABLE_UART_CLI
 
 
 // RAM copy of saved preset data
 static metronome_presets_t _presets;
 
+
+// Forward declaration of GPIO interrupt callbacks for buttons
+void _up_button_callback(void) { _gpio_callback(BUTTON_UP); }
+void _down_button_callback(void) { _gpio_callback(BUTTON_DOWN); }
+void _left_button_callback(void) { _gpio_callback(BUTTON_LEFT); }
+void _right_button_callback(void) { _gpio_callback(BUTTON_RIGHT); }
+void _select_button_callback(void) { _gpio_callback(BUTTON_SELECT); }
+void _mode_button_callback(void) { _gpio_callback(BUTTON_MODE); }
+void _add_delete_button_callback(void) { _gpio_callback(BUTTON_ADD_DELETE); }
+
+
 // State tracking/debouncing for all buttons
 static volatile button_info_t _buttons[BUTTON_COUNT] =
 {
-    {false, LOW, DEBOUNCE_IDLE, 0u, UP_BUTTON_PIN},      // BUTTON_UP
-    {false, LOW, DEBOUNCE_IDLE, 0u, DOWN_BUTTON_PIN},    // BUTTON_DOWN
-    {false, LOW, DEBOUNCE_IDLE, 0u, LEFT_BUTTON_PIN},    // BUTTON_LEFT
-    {false, LOW, DEBOUNCE_IDLE, 0u, RIGHT_BUTTON_PIN},   // BUTTON_RIGHT
-    {false, LOW, DEBOUNCE_IDLE, 0u, SELECT_BUTTON_PIN},  // BUTTON_SELECT
-    {false, LOW, DEBOUNCE_IDLE, 0u, MODE_BUTTON_PIN},    // BUTTON_MODE
-    {false, LOW, DEBOUNCE_IDLE, 0u, ADD_DEL_BUTTON_PIN}  // BUTTON_ADD_DELETE
+    {false, LOW, DEBOUNCE_IDLE, 0u, _up_button_callback, UP_BUTTON_PIN},              // BUTTON_UP
+    {false, LOW, DEBOUNCE_IDLE, 0u, _down_button_callback, DOWN_BUTTON_PIN},          // BUTTON_DOWN
+    {false, LOW, DEBOUNCE_IDLE, 0u, _left_button_callback, LEFT_BUTTON_PIN},          // BUTTON_LEFT
+    {false, LOW, DEBOUNCE_IDLE, 0u, _right_button_callback, RIGHT_BUTTON_PIN},        // BUTTON_RIGHT
+    {false, LOW, DEBOUNCE_IDLE, 0u, _select_button_callback,  SELECT_BUTTON_PIN},     // BUTTON_SELECT
+    {false, LOW, DEBOUNCE_IDLE, 0u, _mode_button_callback, MODE_BUTTON_PIN},          // BUTTON_MODE
+    {false, LOW, DEBOUNCE_IDLE, 0u, _add_delete_button_callback, ADD_DEL_BUTTON_PIN}  // BUTTON_ADD_DELETE
 };
 
 // Runtime values for BPM, beat count, metronome mode, and preset index
@@ -210,41 +226,10 @@ static char _preset_name_buf[MAX_PRESET_NAME_LEN];
 static unsigned int _preset_name_pos = 0u;
 
 
-#if ENABLE_UART
+#if ENABLE_UART_LOGGING
 #define LOG_INFO(fmt, ...) log("INFO", __func__, __LINE__, fmt, ##__VA_ARGS__)
 #define LOG_ERROR(fmt, ...) log("ERROR", __func__, __LINE__, fmt, ##__VA_ARGS__)
-#else
-#define LOG_INFO(fmt, ...) {}
-#define LOG_ERROR(fmt, ...) {}
-#endif // ENABLE_UART
 
-// CRC generator, used to generate CRCs for preset data in flash
-Arduino_CRC32 crc_generator;
-
-// Flash storage object for preset saving
-FlashStorage(preset_store, metronome_presets_t);
-
-
-// GPIO callback wrapper, initiates debounce for button pin if not already in progress
-static void _gpio_callback(buttons_e button)
-{
-    if (DEBOUNCE_IDLE == _buttons[button].state)
-    {
-        _buttons[button].state = DEBOUNCE_START;
-    }
-}
-
-// GPIO interrupt callbacks for buttons
-void _up_button_callback(void) { _gpio_callback(BUTTON_UP); }
-void _down_button_callback(void) { _gpio_callback(BUTTON_DOWN); }
-void _left_button_callback(void) { _gpio_callback(BUTTON_LEFT); }
-void _right_button_callback(void) { _gpio_callback(BUTTON_RIGHT); }
-void _select_button_callback(void) { _gpio_callback(BUTTON_SELECT); }
-void _mode_button_callback(void) { _gpio_callback(BUTTON_MODE); }
-void _add_delete_button_callback(void) { _gpio_callback(BUTTON_ADD_DELETE); }
-
-
-#if ENABLE_UART
 // Formats and prints a debug message to the UART
 static void log(const char *level, const char *func, int line, char *fmt, ...)
 {
@@ -263,22 +248,63 @@ static void log(const char *level, const char *func, int line, char *fmt, ...)
 
     Serial.println(msg_buf);
 }
+#else
+#define LOG_INFO(fmt, ...) {}
+#define LOG_ERROR(fmt, ...) {}
+#endif // ENABLE_UART_LOGGING
 
+// CRC generator, used to generate CRCs for preset data in flash
+Arduino_CRC32 crc_generator;
+
+// Flash storage object for preset saving
+FlashStorage(preset_store, metronome_presets_t);
+
+
+// GPIO callback wrapper, initiates debounce for button pin if not already in progress
+static void _gpio_callback(buttons_e button)
+{
+    if (DEBOUNCE_IDLE == _buttons[button].state)
+    {
+        // Disable interrupt for this pin
+        detachInterrupt(digitalPinToInterrupt(_buttons[button].gpio_pin));
+
+        // Tell debounce loop that pin state has changed
+        _buttons[button].state = DEBOUNCE_START;
+    }
+}
+
+
+#if ENABLE_UART_CLI
 // 'help' CLI command handler
 void _help_cmd_handler(char *cmd_args)
 {
     Serial.println("-------- CLI command reference ---------");
     Serial.print("Version ");
     Serial.println(METRONOME_SKETCH_VERSION);
-    Serial.println("help   - Show this printout");
-    Serial.println("u      - Inject UP button press");
-    Serial.println("d      - Inject DOWN button press");
-    Serial.println("l      - Inject LEFT button press");
-    Serial.println("r      - Inject RIGHT button press");
-    Serial.println("s      - Inject SELECT button press");
-    Serial.println("m      - Inject MODE button press");
-    Serial.println("a      - Inject ADD/DEL button press");
+    Serial.println("help     - Show this printout");
+    Serial.println("presets  - Show all saved presets");
+    Serial.println("u        - Inject UP button press");
+    Serial.println("d        - Inject DOWN button press");
+    Serial.println("l        - Inject LEFT button press");
+    Serial.println("r        - Inject RIGHT button press");
+    Serial.println("s        - Inject SELECT button press");
+    Serial.println("m        - Inject MODE button press");
+    Serial.println("a        - Inject ADD/DEL button press");
     Serial.println("----------------------------------------");
+}
+
+// 'dump presets' CLI command handler
+static void _presets_cmd_handler(char *cmd_args)
+{
+    for (unsigned int i = 0u; i < _presets.preset_count; i++)
+    {
+        Serial.print("preset #");
+        Serial.print(i);
+        Serial.print(": ");
+        Serial.print(_presets.presets[i].name);
+        Serial.print(" ");
+        Serial.println(_presets.presets[i].settings, HEX);
+    }
 }
 
 // 'up' simulated button press CLI command handler
@@ -398,7 +424,7 @@ static void _handle_cli_commands(void)
 
     _cli_buf_pos = 0u;
 }
-#endif // ENABLE_UART
+#endif // ENABLE_UART_CLI
 
 // Calculate CRC value of preset data
 static uint32_t _calc_preset_crc(void)
@@ -977,6 +1003,11 @@ static bool _handle_inputs(void)
                     buttons_pressed += 1u;
                 }
 
+                // Re-enable interrupt for this pin
+                attachInterrupt(digitalPinToInterrupt(_buttons[i].gpio_pin),
+                                _buttons[i].callback,
+                                (_buttons[i].pressed_state) ? RISING : FALLING);
+
                 _buttons[i].state =  DEBOUNCE_IDLE;
             }
         }
@@ -1021,10 +1052,13 @@ void setup()
     for (unsigned int i = 0u; i < BUTTON_COUNT; i++)
     {
         pinMode(_buttons[i].gpio_pin, INPUT);
+        attachInterrupt(digitalPinToInterrupt(_buttons[i].gpio_pin),
+                                              _buttons[i].callback,
+                                              (_buttons[i].pressed_state) ? RISING : FALLING);
     }
 
     // Configure TC4 to generate interrupts for metronome beat
-    GCLK->CLKCTRL.reg = (uint16_t) (GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_GEN_GCLK0 | GCLK_CLKCTRL_ID(GCM_TC4_TC5)) ;
+    GCLK->CLKCTRL.reg = (uint16_t) (GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_GEN_GCLK0 | GCLK_CLKCTRL_ID(GCM_TC4_TC5));
     while (GCLK->STATUS.bit.SYNCBUSY);
     _tc4_reset();
     TC4->COUNT32.CTRLA.reg |= TC_CTRLA_MODE_COUNT32;
@@ -1046,7 +1080,9 @@ void setup()
     // Set timer period based on starting BPM
     _tc4_set_period(_current_bpm);
 
+#if ENABLE_UART_LOGGING || ENABLE_UART_CLI
     Serial.begin(115200);
+#endif // ENABLE_UART_LOGGING || ENABLE_UART_CLI
 
     LOG_INFO("Version "METRONOME_SKETCH_VERSION);
     LOG_INFO("preset store is %u bytes", sizeof(_presets));
@@ -1073,9 +1109,9 @@ void setup()
 
 void loop()
 {
-#if ENABLE_UART
+#if ENABLE_UART_CLI
     _handle_cli_commands();
-#endif // ENABLE_UART
+#endif // ENABLE_UART_CLI
 
     if (_handle_inputs())
     {
