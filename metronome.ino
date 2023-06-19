@@ -188,6 +188,7 @@ static volatile uint16_t _current_beat = 0u;
 // Tracks requested preset index (we only load in a new preset before the first beat of the bar)
 static volatile uint16_t _requested_preset_index = 0u;
 static volatile bool _preset_change_requested = false;
+static volatile bool _preset_change_complete = false;
 
 
 // Table of alphanumeric characters, used for preset name entry
@@ -420,10 +421,10 @@ static bool _save_preset(uint16_t *preset)
 }
 
 // Populate current BPM and beat count from a saved preset slot
-static void _load_preset(uint16_t *preset)
+static void _load_preset(uint16_t preset)
 {
-    _current_bpm = ((*preset) & 0x1FFu) + 1u;
-    _current_beat_count = (((*preset) >> 9u) & 0x7u) + 1u;
+    _current_bpm = ((preset) & 0x1FFu) + 1u;
+    _current_beat_count = (((preset) >> 9u) & 0x7u) + 1u;
 }
 
 // Draw current state to character LCD, based on current state
@@ -468,9 +469,11 @@ void _start_streaming_next_beat(void)
         // First beat of bar, check if preset change was requested
         if (_preset_change_requested)
         {
-            _load_preset(&_presets.presets[_requested_preset_index].settings);
+            _load_preset(_presets.presets[_requested_preset_index].settings);
+            _tc4_set_period(_current_bpm);
             _current_preset_index = _requested_preset_index;
             _preset_change_requested = false;
+            _preset_change_complete = true;
         }
 
         _stream_beat_sound();
@@ -506,6 +509,7 @@ void _tc4_reset(void)
 
 void TC4_Handler(void)
 {
+    _start_streaming_next_beat();
     digitalWrite(13, !digitalRead(13));
     TC4->COUNT32.INTFLAG.bit.MC0 = 1; //Writing a 1 to INTFLAG.bit.MC0 clears the interrupt so that it will run again
 }
@@ -679,7 +683,8 @@ static bool _handle_metronome_inputs(void)
     else if (_buttons[BUTTON_MODE].pressed)
     {
         // Load current preset data
-        _load_preset(&_presets.presets[_current_preset_index].settings);
+        _load_preset(_presets.presets[_current_preset_index].settings);
+        _preset_change_complete = true;
 
         // Switch to preset state (also clears button states)
         _state_transition(STATE_PRESET);
@@ -711,6 +716,12 @@ static bool _handle_metronome_inputs(void)
 static bool _handle_preset_inputs(void)
 {
     bool lcd_update_required = false;
+
+    if (_preset_change_complete)
+    {
+        LOG_INFO("loaded preset '%s'", _presets.presets[_current_preset_index].name);
+        _preset_change_complete = false;
+    }
 
     if (_buttons[BUTTON_UP].pressed)
     {
@@ -765,7 +776,7 @@ static bool _handle_preset_inputs(void)
         // If metronome not running, we can update metronome settings right now
         if (!_metronome_running)
         {
-            _load_preset(&_presets.presets[_requested_preset_index].settings);
+            _load_preset(_presets.presets[_requested_preset_index].settings);
             _current_preset_index = _requested_preset_index;
             _preset_change_requested = false;
         }
@@ -871,6 +882,7 @@ static bool _handle_name_entry_inputs(void)
             {
                 _preset_name_pos -= 1u;
                 lcd_update_required = true;
+                LOG_INFO("delete (%c)", _preset_name_buf[_preset_name_pos]);
             }
         }
         else if ('*' == selected)
@@ -880,8 +892,14 @@ static bool _handle_name_entry_inputs(void)
             metronome_preset_t *preset_slot = &_presets.presets[_presets.preset_count];
             memcpy(preset_slot->name, _preset_name_buf, _preset_name_pos + 1u);
             _save_preset(&preset_slot->settings);
+
             _presets.preset_count += 1u;
+            _preset_name_pos = 0u;
+
             LOG_INFO("saved preset '%s' in slot %u/%u", preset_slot->name, _presets.preset_count, MAX_PRESET_COUNT);
+
+            // Switch to metronome state (also clears button states)
+            _state_transition(STATE_METRONOME);
         }
         else
         {
@@ -931,13 +949,14 @@ static bool _handle_inputs(void)
     {
         if (DEBOUNCE_IDLE == _buttons[i].state)
         {
+            // Nothing to do
             continue;
         }
         else if (DEBOUNCE_FORCE == _buttons[i].state)
         {
+            // Special case for CLI injected inputs, force pressed despite no GPIO state change
             _buttons[i].state = DEBOUNCE_IDLE;
             buttons_pressed += 1u;
-            continue;
         }
         else if (DEBOUNCE_START == _buttons[i].state)
         {
