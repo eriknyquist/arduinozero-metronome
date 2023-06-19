@@ -1,3 +1,57 @@
+/*
+ * Advanced stage metronome for Arduino Zero
+ *
+ * Erik K. Nyquist 2023
+ *
+ * Hardware:
+ *
+ * - Arduino zero
+ *
+ * - 1 toggle switch for power
+ *
+ * - 7 push buttons for setting BPM/beat, and for creating/naming/deleting presets
+ *
+ * - 20x4 character LCD
+ *
+ * - HiLetgo PCM5102 I2S DAC (includes 3.5mm audio jack)
+ *
+ *
+ * Features:
+ *
+ * - Available BPM values are 1 through 512. Dedicated buttons allow incrementing /
+ *   decrementing the current BPM value.
+ *
+ * - Available beat count values are 1 through 16. Dedicated buttons allow
+ *   incrementing / decrementing the current beat count value.
+ *
+ * - Up to 128 presets can be saved. A single preset consists of BPM, beat count,
+ *   a name entered by the user. Saved presets are stored in MCU internal flash.
+ *
+ * - A "preset mode" enables setting the metronome BPM & beat count based on saved
+ *   presets. Dedicated buttons allow switching to the next/previous preset, in the
+ *   order that the presets were originally saved.
+ *
+ * - In "preset mode", if the metronome is running, switching to the next/previous
+ *   preset will be seamless with respect to the current BPM & beat count; instead
+ *   of changing immediately when the button is pressed, the preset will only be
+ *   changed on the first beat of the next bar (i.e. the next beat #1).
+ *
+ * - Metronome beats are triggered by timer interrupts from TC4. Audio samples
+ *   for metronome beats are streamed to the I2S DAC directly in the TC4 interrupt
+ *   handler, using only the non-blocking versions of the I2S library functions.
+ *   Everything else (UART reads/writes, character LCD writes, button state
+ *   processing) is done in the main context inside the loop() function. The result
+ *   of all this is that the timing of metronome beats is very reliable (or at
+ *   least, as reliable as they can be, given the reliablility of the system core
+ *   clock), since anything else we happen to be doing can always be interrupted
+ *   to serve up another chunk of audio samples to the I2S DAC.
+ *
+ * - UART-based command line interface allows full command/control of the metronome
+ *   user interface by interacting with the serial port (this is just extra-- all
+ *   features, including creating/naming/deleting presets, can be accessed via
+ *   buttons & character LCD on the device).
+ */
+
 #include <stdarg.h>
 
 #include <Arduino_CRC32.h>
@@ -16,8 +70,9 @@
 // preset storage and want to avoid wasting flash write cycles
 #define ENABLE_FLASH_WRITE      (0u)
 
-// GPIO pin numbers for 20x4 character LCD (0, 1 and 9 are needed by I2S library.
-// 13 is used for LED that follows the metronome beats)
+// GPIO pin numbers for 20x4 character LCD (0, 1 and 9 are needed by I2S library).
+// 13 is the builtin LED, which is used to show when we are streaming samples to
+// the I2S DAC)
 #define LCD_RS_PIN              (2)
 #define LCD_EN_PIN              (3)
 #define LCD_D4_PIN              (4)
@@ -41,7 +96,7 @@
 #define MIN_BPM                 (1u)    // Min. allowed BPM value
 #define MAX_BPM                 (512u)  // Max. allowed BPM value
 #define MIN_BEAT                (1u)    // Min. allowed beat value
-#define MAX_BEAT                (8u)    // Max. allowed beat value
+#define MAX_BEAT                (16u)   // Max. allowed beat value
 
 // Actual system core clock freq for Arduino Zero
 // (taken from https://github.com/manitou48/crystals/blob/master/crystals.txt)
@@ -78,8 +133,8 @@ typedef enum
 typedef struct
 {
     // Bits 0 through 9: BPM, 0-511 representing 1-512BPM
-    // Bits 9 through 11: beat count, 0-7 representing 1-8 beats
-    // Bits 12 through 15: reserved
+    // Bits 9 through 12: beat count, 0-15 representing 1-16 beats
+    // Bits 13 through 15: reserved
     uint16_t settings;
 
     // Preset name, null-terminated
@@ -443,14 +498,14 @@ static bool _save_preset(uint16_t *preset)
         return false;
     }
 
-    *preset = ((_current_bpm - 1u) & 0x1FFu) | (((_current_beat_count - 1u) & 0x7u) << 0x9u);
+    *preset = ((_current_bpm - 1u) & 0x1FFu) | (((_current_beat_count - 1u) & 0xFu) << 0x9u);
 }
 
 // Populate current BPM and beat count from a saved preset slot
 static void _load_preset(uint16_t preset)
 {
     _current_bpm = ((preset) & 0x1FFu) + 1u;
-    _current_beat_count = (((preset) >> 9u) & 0x7u) + 1u;
+    _current_beat_count = (((preset) >> 9u) & 0xFu) + 1u;
 }
 
 // Draw current state to character LCD, based on current state
@@ -1046,6 +1101,8 @@ void setup()
 
     // Required for snprintf to support floats :(
     asm(".global _printf_float");
+
+    // Use built-in LED to show when we are streaming samples to I2S device
     pinMode(13, OUTPUT);
 
     // Configure button input pins
@@ -1065,7 +1122,6 @@ void setup()
     TC4->COUNT32.CTRLA.reg |= TC_CTRLA_WAVEGEN_MFRQ;
     // Counting at 3MHz
     TC4->COUNT32.CTRLA.reg |= TC_CTRLA_PRESCALER_DIV1;
-
 
     // Configure IRQ for TC4
     NVIC_DisableIRQ(TC4_IRQn);
