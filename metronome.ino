@@ -14,6 +14,25 @@
 // preset storage and want to avoid wasting flash write cycles
 #define ENABLE_FLASH_WRITE      (0u)
 
+// GPIO pin numbers for 20x4 character LCD (0, 1 and 9 are needed by I2S library.
+// 13 is used for LED that follows the metronome beats)
+#define LCD_RS_PIN              (2)
+#define LCD_EN_PIN              (3)
+#define LCD_D4_PIN              (4)
+#define LCD_D5_PIN              (5)
+#define LCD_D6_PIN              (6)
+#define LCD_D7_PIN              (7)
+
+// GPIO pin numbers for buttons
+#define UP_BUTTON_PIN           (A0)
+#define DOWN_BUTTON_PIN         (A1)
+#define LEFT_BUTTON_PIN         (A2)
+#define RIGHT_BUTTON_PIN        (A3)
+#define SELECT_BUTTON_PIN       (A4)
+#define MODE_BUTTON_PIN         (A5)
+#define ADD_DEL_BUTTON_PIN      (A5)
+
+
 #define MAX_PRESET_NAME_LEN     (32u)   // Max. number of characters for a preset name string
 #define MAX_PRESET_COUNT        (128u)  // Max. number of presets that can be saved in flash
 #define BUTTON_DEBOUNCE_MS      (100u)  // Button debounce time, milliseconds
@@ -144,13 +163,13 @@ static metronome_presets_t _presets;
 // State tracking/debouncing for all buttons
 static volatile button_info_t _buttons[BUTTON_COUNT] =
 {
-    {false, LOW, DEBOUNCE_IDLE, 0u, 11},  // BUTTON_UP
-    {false, LOW, DEBOUNCE_IDLE, 0u, 12},  // BUTTON_DOWN
-    {false, LOW, DEBOUNCE_IDLE, 0u, 10},  // BUTTON_LEFT
-    {false, LOW, DEBOUNCE_IDLE, 0u, 14},  // BUTTON_RIGHT
-    {false, LOW, DEBOUNCE_IDLE, 0u, 15},  // BUTTON_SELECT
-    {false, LOW, DEBOUNCE_IDLE, 0u, 16},  // BUTTON_MODE
-    {false, LOW, DEBOUNCE_IDLE, 0u, 17}   // BUTTON_ADD_DELETE
+    {false, LOW, DEBOUNCE_IDLE, 0u, UP_BUTTON_PIN},      // BUTTON_UP
+    {false, LOW, DEBOUNCE_IDLE, 0u, DOWN_BUTTON_PIN},    // BUTTON_DOWN
+    {false, LOW, DEBOUNCE_IDLE, 0u, LEFT_BUTTON_PIN},    // BUTTON_LEFT
+    {false, LOW, DEBOUNCE_IDLE, 0u, RIGHT_BUTTON_PIN},   // BUTTON_RIGHT
+    {false, LOW, DEBOUNCE_IDLE, 0u, SELECT_BUTTON_PIN},  // BUTTON_SELECT
+    {false, LOW, DEBOUNCE_IDLE, 0u, MODE_BUTTON_PIN},    // BUTTON_MODE
+    {false, LOW, DEBOUNCE_IDLE, 0u, ADD_DEL_BUTTON_PIN}  // BUTTON_ADD_DELETE
 };
 
 // Runtime values for BPM, beat count, metronome mode, and preset index
@@ -172,12 +191,22 @@ static volatile bool _preset_change_requested = false;
 
 
 // Table of alphanumeric characters, used for preset name entry
-static char _alphanum_table[3][20] =
+#define ALPHANUM_ROWS (3u)
+#define ALPHANUM_COLS (20u)
+static char _alphanum_table[ALPHANUM_ROWS][ALPHANUM_COLS] =
 {
     {' ', ' ', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', ' ', '1', '2', '3', '4', ' ', ' ', ' '},
     {' ', ' ', 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', '_', ' ', '5', '6', '7', '8', ' ', ' ', ' '},
-    {' ', ' ', ' ', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ' ', '<', ' ', ' ', '9', '0', ' ', ' ', ' ', ' '},
+    {' ', ' ', ' ', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ' ', '<', ' ', ' ', '9', '0', ' ', ' ', '*', ' '},
 };
+
+// Tracks cursor position within aplhanum table, for preset name entry
+static unsigned int _alphanum_col = 0u;
+static unsigned int _alphanum_row = 0u;
+
+// Buffer to hold preset name during preset name entry
+static char _preset_name_buf[MAX_PRESET_NAME_LEN];
+static unsigned int _preset_name_pos = 0u;
 
 
 #if ENABLE_UART
@@ -535,6 +564,7 @@ void _tc4_set_period(unsigned int bpm)
 // Display "no more room for presets" message and wait 2s
 static void _max_preset_count_exceeded(void)
 {
+    LOG_ERROR("No more room for presets");
 }
 
 // Helper function to change state and log the transition
@@ -665,6 +695,8 @@ static bool _handle_metronome_inputs(void)
         else
         {
             // Switch to preset name entry state (also clears button states)
+            _alphanum_col = 2u;
+            _alphanum_row = 0u;
             _state_transition(STATE_PRESET_NAME_ENTRY);
             lcd_update_required = true;
         }
@@ -742,6 +774,83 @@ static bool _handle_preset_inputs(void)
     return lcd_update_required;
 }
 
+// Increment alphanum table row index to next non-space character,
+// return true if a non-space character was found
+static bool _change_alphanum_row(bool increment)
+{
+    int32_t val_to_add = increment ? 1 : -1;
+
+    unsigned int old_row = _alphanum_row;
+    unsigned int old_col = _alphanum_col;
+
+    if ((_alphanum_row == 0) && !increment)
+    {
+        return false;
+    }
+    if ((_alphanum_row == (ALPHANUM_ROWS - 1)) && increment)
+    {
+        return false;
+    }
+
+    do
+    {
+        _alphanum_row = (unsigned int) (((int) _alphanum_row) + val_to_add);
+        if (' ' != _alphanum_table[_alphanum_row][_alphanum_col])
+        {
+            LOG_INFO("cursor (%c)", _alphanum_table[_alphanum_row][_alphanum_col]);
+            return true;
+        }
+    } while ((_alphanum_row > 0) && (_alphanum_row < (ALPHANUM_ROWS - 1)));
+
+    _alphanum_row = old_row;
+    _alphanum_col = old_col;
+
+    return false;
+}
+
+// Increment alphanum table column index to next non-space character,
+// return true if a non-space character was found
+static bool _change_alphanum_col(bool increment)
+{
+    int32_t val_to_add = increment ? 1 : -1;
+
+    unsigned int old_row = _alphanum_row;
+    unsigned int old_col = _alphanum_col;
+
+    if ((_alphanum_col == 0) && !increment)
+    {
+        return false;
+    }
+    if ((_alphanum_col == (ALPHANUM_COLS - 1)) && increment)
+    {
+        return false;
+    }
+
+    do
+    {
+        _alphanum_col = (unsigned int) (((int) _alphanum_col) + val_to_add);
+        if (' ' != _alphanum_table[_alphanum_row][_alphanum_col])
+        {
+            LOG_INFO("cursor (%c)", _alphanum_table[_alphanum_row][_alphanum_col]);
+            return true;
+        }
+    } while ((_alphanum_col > 0) && (_alphanum_col < (ALPHANUM_COLS - 1)));
+
+    if (increment)
+    {
+        // Go to save/end button by default if all the way to the right
+        LOG_INFO("cursor (*)");
+        _alphanum_row = ALPHANUM_ROWS - 1u;
+        _alphanum_col = ALPHANUM_COLS - 2u;
+        return true;
+    }
+
+    _alphanum_row = old_row;
+    _alphanum_col = old_col;
+
+    return false;
+}
+
 // Handle button inputs in "preset name entry" mode
 static bool _handle_name_entry_inputs(void)
 {
@@ -751,6 +860,61 @@ static bool _handle_name_entry_inputs(void)
         // Switch to metronome state (also clears button states)
         _state_transition(STATE_METRONOME);
         lcd_update_required = true;
+    }
+    else if (_buttons[BUTTON_SELECT].pressed)
+    {
+        char selected = _alphanum_table[_alphanum_row][_alphanum_col];
+        if ('<' == selected)
+        {
+            // Delete last char
+            if (0u < _preset_name_pos)
+            {
+                _preset_name_pos -= 1u;
+                lcd_update_required = true;
+            }
+        }
+        else if ('*' == selected)
+        {
+            // Done, save preset
+            _preset_name_buf[_preset_name_pos] = '\0';
+            metronome_preset_t *preset_slot = &_presets.presets[_presets.preset_count];
+            memcpy(preset_slot->name, _preset_name_buf, _preset_name_pos + 1u);
+            _save_preset(&preset_slot->settings);
+            _presets.preset_count += 1u;
+            LOG_INFO("saved preset '%s' in slot %u/%u", preset_slot->name, _presets.preset_count, MAX_PRESET_COUNT);
+        }
+        else
+        {
+            if (MAX_PRESET_NAME_LEN > _preset_name_pos)
+            {
+                _preset_name_buf[_preset_name_pos] = selected;
+                _preset_name_pos += 1u;
+                lcd_update_required = true;
+                LOG_INFO("selected char '%c'", selected);
+            }
+        }
+
+        _buttons[BUTTON_SELECT].pressed = false;
+    }
+    else if (_buttons[BUTTON_UP].pressed)
+    {
+        lcd_update_required = _change_alphanum_row(false);
+        _buttons[BUTTON_UP].pressed = false;
+    }
+    else if (_buttons[BUTTON_DOWN].pressed)
+    {
+        lcd_update_required = _change_alphanum_row(true);
+        _buttons[BUTTON_DOWN].pressed = false;
+    }
+    else if (_buttons[BUTTON_LEFT].pressed)
+    {
+        lcd_update_required = _change_alphanum_col(false);
+        _buttons[BUTTON_LEFT].pressed = false;
+    }
+    else if (_buttons[BUTTON_RIGHT].pressed)
+    {
+        lcd_update_required = _change_alphanum_col(true);
+        _buttons[BUTTON_RIGHT].pressed = false;
     }
 
     return lcd_update_required;
