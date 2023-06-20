@@ -64,7 +64,7 @@
 #define ENABLE_UART_LOGGING     (1u)
 
 // If 0, CLI interface will not be available
-#define ENABLE_UART_CLI         (0u)
+#define ENABLE_UART_CLI         (1u)
 
 // Only used for debugging, useful if testing something unrelated to
 // preset storage and want to avoid wasting flash write cycles
@@ -111,9 +111,13 @@
 // mean different things for each of these states.
 typedef enum
 {
-    STATE_METRONOME,         // Standard metronome mode
-    STATE_PRESET,            // Preset playback mode
-    STATE_PRESET_NAME_ENTRY  // Preset name entry mode
+    STATE_METRONOME,                // Standard metronome screen
+    STATE_PRESET_PLAYBACK,          // Preset playback screen
+    STATE_PRESET_EDIT,              // Preset edit screen
+    STATE_PRESET_EDIT_DELETE_MENU,  // Menu showing edit/delete options for current preset
+    STATE_PRESET_DELETE_CHECK,      // Menu showing "are you sure? yes/no" for preset deletion
+    STATE_PRESET_NAME_ENTRY,        // Preset name entry screen
+    STATE_COUNT
 } metronome_state_e;
 
 // Enumerates all buttons
@@ -508,6 +512,35 @@ static void _load_preset(uint16_t preset)
     _current_beat_count = (((preset) >> 9u) & 0xFu) + 1u;
 }
 
+// Delete a preset from the RAM copy, by 0-based preset index
+static void _delete_preset(unsigned int index)
+{
+    if (0u == _presets.preset_count)
+    {
+        // Nothing to do
+        return;
+    }
+
+    // If the last index, only need to decrement the preset count
+    if (index < (_presets.preset_count - 1u))
+    {
+        // Calculate presets remaining after deleted preset
+        unsigned int presets_remaining = (_presets.preset_count - 1u) - index;
+        unsigned int bytes_remaining = sizeof(metronome_preset_t) * presets_remaining;
+
+        // Shift remaining presets down to cover the deleted preset
+        memmove(&_presets.presets[index], &_presets.presets[index + 1u], bytes_remaining);
+    }
+
+    _presets.preset_count -= 1u;
+
+    // Check if current preset index is still valid
+    if (_current_preset_index >= _presets.preset_count)
+    {
+        _current_preset_index = _presets.preset_count - 1u;
+    }
+}
+
 // Draw current state to character LCD, based on current state
 static void _update_char_lcd(void)
 {
@@ -515,7 +548,7 @@ static void _update_char_lcd(void)
     {
         // TODO
     }
-    else if (STATE_PRESET == _current_state)
+    else if (STATE_PRESET_PLAYBACK == _current_state)
     {
         // TODO
     }
@@ -541,6 +574,7 @@ static void _stream_subbeat_sound()
     // TODO: implement
 }
 
+// Called on TC4 interrupt, starts streaming the next beat to the I2S DAC
 void _start_streaming_next_beat(void)
 {
     unsigned long now = millis();
@@ -588,6 +622,7 @@ void _tc4_reset(void)
     while (TC4->COUNT32.CTRLA.bit.SWRST);
 }
 
+// Interrupt handler for TC4
 void TC4_Handler(void)
 {
     _start_streaming_next_beat();
@@ -598,27 +633,24 @@ void TC4_Handler(void)
 // Start metronome with current settings (enable timer interrupt)
 static void _start_metronome(void)
 {
-    LOG_INFO("starting metronome");
-
     // Start timer/counter, if runnning
     if ((TC4->COUNT32.CTRLA.reg & TC_CTRLA_ENABLE) == 0u)
     {
         TC4->COUNT32.CTRLA.reg |= TC_CTRLA_ENABLE;
         _metronome_running = true;
+        LOG_INFO("starting metronome");
     }
 }
 
 // Stop metronome (disable timer interrupt)
 static void _stop_metronome(void)
 {
-    LOG_INFO("stopping metronome");
-
     // Start timer/counter, if runnning
     if ((TC4->COUNT32.CTRLA.reg & TC_CTRLA_ENABLE) > 0u)
     {
         TC4->COUNT32.CTRLA.reg &= ~TC_CTRLA_ENABLE;
         _metronome_running = false;
-
+        LOG_INFO("stopping metronome");
     }
 }
 
@@ -659,16 +691,25 @@ void _state_transition(metronome_state_e new_state)
     switch(new_state)
     {
         case STATE_METRONOME:
-            statename = "METRONOME";
+            statename = "Metronome";
             break;
-        case STATE_PRESET:
-            statename = "PRESET";
+        case STATE_PRESET_PLAYBACK:
+            statename = "Preset playback";
+            break;
+        case STATE_PRESET_EDIT:
+            statename = "Preset editing";
+            break;
+        case STATE_PRESET_DELETE_CHECK:
+            statename = "Preset deletion check";
+            break;
+        case STATE_PRESET_EDIT_DELETE_MENU:
+            statename = "Preset edit/delete menu";
             break;
         case STATE_PRESET_NAME_ENTRY:
-            statename = "PRESET_NAME_ENTRY";
+            statename = "Preset name entry";
             break;
     }
-    LOG_INFO("changing to state %s", statename);
+    LOG_INFO("changing to state '%s'", statename);
 
     // Stop metronome timer/counter
     _stop_metronome();
@@ -684,7 +725,124 @@ void _state_transition(metronome_state_e new_state)
     _current_state = new_state;
 }
 
-// Handle button inputs in "metronome" mode
+// Handle button inputs on edit saved preset screen
+static bool _handle_preset_edit_inputs(void)
+{
+}
+
+// Handle button inputs on the edit/delete preset menu screen
+static bool _handle_edit_delete_menu_inputs(void)
+{
+    bool lcd_update_required = false;
+
+    static const unsigned int num_options = 3u;
+    static const char *options[num_options] = {"Edit preset", "Delete preset", "Cancel"};
+    static unsigned int selected = 0u;
+
+    if (_buttons[BUTTON_UP].pressed)
+    {
+        if (selected > 0u)
+        {
+            selected -= 1u;
+            lcd_update_required = true;
+            LOG_INFO("selected: %s", options[selected]);
+        }
+
+        _buttons[BUTTON_UP].pressed = false;
+    }
+    else if (_buttons[BUTTON_DOWN].pressed)
+    {
+        if (selected < (num_options - 1u))
+        {
+            selected += 1u;
+            lcd_update_required = true;
+            LOG_INFO("selected: %s", options[selected]);
+        }
+
+        _buttons[BUTTON_DOWN].pressed = false;
+    }
+    else if (_buttons[BUTTON_SELECT].pressed)
+    {
+        if (2u == selected)
+        {
+            // Cancel, go back to preset playback
+            _state_transition(STATE_PRESET_PLAYBACK);
+        }
+        else if (1u == selected)
+        {
+            // Delete. double check ("are you sure...")
+            _state_transition(STATE_PRESET_DELETE_CHECK);
+        }
+        else if (0u == selected)
+        {
+            // Edit preset
+            _state_transition(STATE_PRESET_EDIT);
+        }
+
+        lcd_update_required = true;
+        _buttons[BUTTON_SELECT].pressed = false;
+    }
+
+    return lcd_update_required;
+}
+
+// Handle button inputs on the "are you sure?" screen for preset deletion
+static bool _handle_preset_delete_inputs(void)
+{
+    bool lcd_update_required = false;
+
+    static const unsigned int num_options = 2u;
+    static const char *options[num_options] = {"Yes", "No"};
+    static unsigned int selected = 0u;
+
+    if (_buttons[BUTTON_UP].pressed)
+    {
+        if (selected > 0u)
+        {
+            selected -= 1u;
+            lcd_update_required = true;
+            LOG_INFO("selected: %s", options[selected]);
+        }
+
+        _buttons[BUTTON_UP].pressed = false;
+    }
+    else if (_buttons[BUTTON_DOWN].pressed)
+    {
+        if (selected < (num_options - 1u))
+        {
+            selected += 1u;
+            lcd_update_required = true;
+            LOG_INFO("selected: %s", options[selected]);
+        }
+
+        _buttons[BUTTON_DOWN].pressed = false;
+    }
+    else if (_buttons[BUTTON_SELECT].pressed)
+    {
+        if (1u == selected)
+        {
+            // Cancel deletion, go back to edit/delete menu
+            _state_transition(STATE_PRESET_EDIT_DELETE_MENU);
+        }
+        else if (0u == selected)
+        {
+            // Delete preset, confirmed
+            LOG_INFO("deleting preset #%u '%s'",
+                     _current_preset_index,
+                     _presets.presets[_current_preset_index].name);
+            _delete_preset(_current_preset_index);
+
+            // Return to preset playback state
+            _state_transition(STATE_PRESET_PLAYBACK);
+        }
+
+        lcd_update_required = true;
+    }
+
+    return lcd_update_required;
+}
+
+// Handle button inputs on the metronome screen
 static bool _handle_metronome_inputs(void)
 {
     bool lcd_update_required = false;
@@ -696,7 +854,6 @@ static bool _handle_metronome_inputs(void)
             lcd_update_required = true;
             _current_bpm += 1u;
             LOG_INFO("%u BPM", _current_bpm);
-            _tc4_set_period(_current_bpm);
         }
 
         _buttons[BUTTON_UP].pressed = false;
@@ -709,7 +866,6 @@ static bool _handle_metronome_inputs(void)
             lcd_update_required = true;
             _current_bpm -= 1u;
             LOG_INFO("%u BPM", _current_bpm);
-            _tc4_set_period(_current_bpm);
         }
 
         _buttons[BUTTON_DOWN].pressed = false;
@@ -749,9 +905,10 @@ static bool _handle_metronome_inputs(void)
     else if (_buttons[BUTTON_SELECT].pressed)
     {
         // Start/stop metronome
-        _metronome_running = !_metronome_running;
-        if (_metronome_running)
+        if (!_metronome_running)
         {
+            // Start timer counting for current BPM
+            _tc4_set_period(_current_bpm);
             _start_metronome();
         }
         else
@@ -763,13 +920,14 @@ static bool _handle_metronome_inputs(void)
     }
     else if (_buttons[BUTTON_MODE].pressed)
     {
+        // Switch to preset state (also clears button states)
+        _state_transition(STATE_PRESET_PLAYBACK);
+        lcd_update_required = true;
+
         // Load current preset data
         _load_preset(_presets.presets[_current_preset_index].settings);
+        _tc4_set_period(_current_bpm);
         _preset_change_complete = true;
-
-        // Switch to preset state (also clears button states)
-        _state_transition(STATE_PRESET);
-        lcd_update_required = true;
     }
     else if (_buttons[BUTTON_ADD_DELETE].pressed)
     {
@@ -793,8 +951,8 @@ static bool _handle_metronome_inputs(void)
     return lcd_update_required;
 }
 
-// Handle button inputs in "preset" mode
-static bool _handle_preset_inputs(void)
+// Handle button inputs in "preset playback" mode
+static bool _handle_preset_playback_inputs(void)
 {
     bool lcd_update_required = false;
 
@@ -806,33 +964,50 @@ static bool _handle_preset_inputs(void)
 
     if (_buttons[BUTTON_UP].pressed)
     {
-        // Increment requested preset index
-        _requested_preset_index = (_current_preset_index + 1u) % _presets.preset_count;
-        _preset_change_requested = true;
+        unsigned int new_index = (_current_preset_index + 1u) % _presets.preset_count;
+        if (_metronome_running)
+        {
+            // Increment requested preset index
+            _requested_preset_index = new_index;
+            _preset_change_requested = true;
+        }
+        else
+        {
+            // Load new preset immediately
+            _current_preset_index = new_index;
+            _load_preset(_presets.presets[_current_preset_index].settings);
+            _preset_change_complete = true;
+        }
+
         _buttons[BUTTON_UP].pressed = false;
     }
     else if (_buttons[BUTTON_DOWN].pressed)
     {
-        // Decrement requested preset index
-        if (0u == _current_preset_index)
+        unsigned int new_index = (0u == _current_preset_index) ? _presets.preset_count - 1u :
+                                                                 _current_preset_index - 1u;
+        if (_metronome_running)
         {
-            _requested_preset_index = _presets.preset_count - 1u;
+            // Increment requested preset index
+            _requested_preset_index = new_index;
+            _preset_change_requested = true;
         }
         else
         {
-            _requested_preset_index = _current_preset_index - 1u;
+            // Load new preset immediately
+            _current_preset_index = new_index;
+            _load_preset(_presets.presets[_current_preset_index].settings);
+            _preset_change_complete = true;
         }
 
         _buttons[BUTTON_DOWN].pressed = false;
-        _preset_change_requested = true;
     }
     else if (_buttons[BUTTON_SELECT].pressed)
     {
         // Start/stop metronome
-        _metronome_running = !_metronome_running;
-        if (_metronome_running)
+        if (!_metronome_running)
         {
-            // Load current preset
+            // Start timer counting for current BPM
+            _tc4_set_period(_current_bpm);
             _start_metronome();
         }
         else
@@ -846,6 +1021,13 @@ static bool _handle_preset_inputs(void)
     {
         // Switch to metronome state (also clears button states)
         _state_transition(STATE_METRONOME);
+        lcd_update_required = true;
+    }
+    else if (_buttons[BUTTON_ADD_DELETE].pressed)
+    {
+        // Switch to edit/delete menu state
+        _state_transition(STATE_PRESET_EDIT_DELETE_MENU);
+        _stop_metronome();
         lcd_update_required = true;
     }
 
@@ -1028,42 +1210,43 @@ static bool _handle_inputs(void)
     // Handle debouncing for buttons
     for (unsigned int i = 0u; i < BUTTON_COUNT; i++)
     {
-        if (DEBOUNCE_IDLE == _buttons[i].state)
+        switch(_buttons[i].state)
         {
-            // Nothing to do
-            continue;
-        }
-        else if (DEBOUNCE_FORCE == _buttons[i].state)
-        {
-            // Special case for CLI injected inputs, force pressed despite no GPIO state change
-            _buttons[i].state = DEBOUNCE_IDLE;
-            buttons_pressed += 1u;
-        }
-        else if (DEBOUNCE_START == _buttons[i].state)
-        {
-            // Start debouncing this signal
-            _buttons[i].start_ms = millis();
-            _buttons[i].state = DEBOUNCE_ACTIVE;
-        }
-        else if (DEBOUNCE_ACTIVE == _buttons[i].state)
-        {
-            // Debounce in progress, check if complete
-            unsigned long elapsed = millis() - _buttons[i].start_ms;
-            if (BUTTON_DEBOUNCE_MS <= elapsed)
+            case DEBOUNCE_IDLE:
+                // Nothing to do
+                continue;
+                break;
+            case DEBOUNCE_FORCE:
+                // Special case for CLI injected inputs, force pressed despite no GPIO state change
+                _buttons[i].state = DEBOUNCE_IDLE;
+                buttons_pressed += 1u;
+                break;
+            case DEBOUNCE_START:
+                // Start debouncing this signal
+                _buttons[i].start_ms = millis();
+                _buttons[i].state = DEBOUNCE_ACTIVE;
+                break;
+            case DEBOUNCE_ACTIVE:
             {
-                if (digitalRead(_buttons[i].gpio_pin) == _buttons[i].pressed_state)
+                // Debounce in progress, check if complete
+                unsigned long elapsed = millis() - _buttons[i].start_ms;
+                if (BUTTON_DEBOUNCE_MS <= elapsed)
                 {
-                    // Button is pressed after debounce
-                    _buttons[i].pressed = true;
-                    buttons_pressed += 1u;
+                    if (digitalRead(_buttons[i].gpio_pin) == _buttons[i].pressed_state)
+                    {
+                        // Button is pressed after debounce
+                        _buttons[i].pressed = true;
+                        buttons_pressed += 1u;
+                    }
+
+                    // Re-enable interrupt for this pin
+                    attachInterrupt(digitalPinToInterrupt(_buttons[i].gpio_pin),
+                                    _buttons[i].callback,
+                                    (_buttons[i].pressed_state) ? RISING : FALLING);
+
+                    _buttons[i].state =  DEBOUNCE_IDLE;
                 }
-
-                // Re-enable interrupt for this pin
-                attachInterrupt(digitalPinToInterrupt(_buttons[i].gpio_pin),
-                                _buttons[i].callback,
-                                (_buttons[i].pressed_state) ? RISING : FALLING);
-
-                _buttons[i].state =  DEBOUNCE_IDLE;
+                break;
             }
         }
     }
@@ -1075,24 +1258,30 @@ static bool _handle_inputs(void)
     }
 
     // Handle any buttons that have been pressed
-    if (STATE_METRONOME == _current_state)
+    bool lcd_update_required = false;
+    switch (_current_state)
     {
-        return _handle_metronome_inputs();
-    }
-    else if (STATE_PRESET == _current_state)
-    {
-        return _handle_preset_inputs();
-    }
-    else if (STATE_PRESET_NAME_ENTRY == _current_state)
-    {
-        return _handle_name_entry_inputs();
-    }
-    else
-    {
-        // Error
+        case STATE_METRONOME:
+            lcd_update_required = _handle_metronome_inputs();
+            break;
+        case STATE_PRESET_EDIT_DELETE_MENU:
+            lcd_update_required = _handle_edit_delete_menu_inputs();
+            break;
+        case STATE_PRESET_PLAYBACK:
+            lcd_update_required = _handle_preset_playback_inputs();
+            break;
+        case STATE_PRESET_EDIT:
+            lcd_update_required = _handle_preset_edit_inputs();
+            break;
+        case STATE_PRESET_DELETE_CHECK:
+            lcd_update_required =  _handle_preset_delete_inputs();
+            break;
+        case STATE_PRESET_NAME_ENTRY:
+            lcd_update_required = _handle_name_entry_inputs();
+            break;
     }
 
-    return false;
+    return lcd_update_required;
 }
 
 
