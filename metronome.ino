@@ -131,7 +131,7 @@ typedef enum
     BUTTON_MODE,
     BUTTON_ADD_DELETE,
     BUTTON_COUNT
-} buttons_e;
+} button_e;
 
 // Holds all data for a single metronome preset
 typedef struct
@@ -225,7 +225,7 @@ static unsigned int _cli_buf_pos = 0u;
 static metronome_presets_t _presets;
 
 
-// Forward declaration of GPIO interrupt callbacks for buttons
+// GPIO interrupt callbacks for buttons
 void _up_button_callback(void) { _gpio_callback(BUTTON_UP); }
 void _down_button_callback(void) { _gpio_callback(BUTTON_DOWN); }
 void _left_button_callback(void) { _gpio_callback(BUTTON_LEFT); }
@@ -266,7 +266,9 @@ static volatile bool _preset_change_requested = false;
 static volatile bool _preset_change_complete = false;
 
 
-// Table of alphanumeric characters, used for preset name entry
+// Table of alphanumeric characters, used for preset name entry. '<' represents
+// a backspace, '_' represents a space character, and '*' represents a 'done/save' button.
+// All of those symbols may be drawn differently on the character LCD.
 #define ALPHANUM_ROWS (3u)
 #define ALPHANUM_COLS (20u)
 static char _alphanum_table[ALPHANUM_ROWS][ALPHANUM_COLS] =
@@ -320,7 +322,7 @@ FlashStorage(preset_store, metronome_presets_t);
 
 
 // GPIO callback wrapper, initiates debounce for button pin if not already in progress
-static void _gpio_callback(buttons_e button)
+static void _gpio_callback(button_e button)
 {
     if (DEBOUNCE_IDLE == _buttons[button].state)
     {
@@ -361,59 +363,27 @@ static void _presets_cmd_handler(char *cmd_args)
         Serial.print(i);
         Serial.print(": ");
         Serial.print(_presets.presets[i].name);
-        Serial.print(" ");
+        Serial.print(" 0x");
         Serial.println(_presets.presets[i].settings, HEX);
     }
 }
 
-// 'up' simulated button press CLI command handler
-static void _up_cmd_handler(char *cmd_args)
+// Generic simulated button press CLI command handler
+static void _button_cli_handler(button_e button)
 {
-    _buttons[BUTTON_UP].pressed = true;
-    _buttons[BUTTON_UP].state = DEBOUNCE_FORCE;
+    _buttons[button].pressed = true;
+    _buttons[button].state = DEBOUNCE_FORCE;
 }
 
-// 'down' simulated button press CLI command handler
-static void _down_cmd_handler(char *cmd_args)
-{
-    _buttons[BUTTON_DOWN].pressed = true;
-    _buttons[BUTTON_DOWN].state = DEBOUNCE_FORCE;
-}
+// CLI command handlers for simulated button presses
+static void _up_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_UP); }
+static void _down_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_DOWN); }
+static void _left_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_LEFT); }
+static void _right_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_RIGHT); }
+static void _select_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_SELECT); }
+static void _mode_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_MODE); }
+static void _add_del_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_ADD_DELETE); }
 
-// 'mode' simulated button press CLI command handler
-static void _left_cmd_handler(char *cmd_args)
-{
-    _buttons[BUTTON_LEFT].pressed = true;
-    _buttons[BUTTON_LEFT].state = DEBOUNCE_FORCE;
-}
-
-// 'select' simulated button press CLI command handler
-static void _right_cmd_handler(char *cmd_args)
-{
-    _buttons[BUTTON_RIGHT].pressed = true;
-    _buttons[BUTTON_RIGHT].state = DEBOUNCE_FORCE;
-}
-
-// 'beat' simulated button press CLI command handler
-static void _select_cmd_handler(char *cmd_args)
-{
-    _buttons[BUTTON_SELECT].pressed = true;
-    _buttons[BUTTON_SELECT].state = DEBOUNCE_FORCE;
-}
-
-// 'add/del' simulated button press CLI command handler
-static void _mode_cmd_handler(char *cmd_args)
-{
-    _buttons[BUTTON_MODE].pressed = true;
-    _buttons[BUTTON_MODE].state = DEBOUNCE_FORCE;
-}
-
-// 'start/stop' simulated button press CLI command handler
-static void _add_del_cmd_handler(char *cmd_args)
-{
-    _buttons[BUTTON_ADD_DELETE].pressed = true;
-    _buttons[BUTTON_ADD_DELETE].state = DEBOUNCE_FORCE;
-}
 
 // Read CLI commands from serial port, and run command handlers if required
 static void _handle_cli_commands(void)
@@ -725,9 +695,111 @@ void _state_transition(metronome_state_e new_state)
     _current_state = new_state;
 }
 
+// Handle all buttons related to changing metronome BPM and beat count, and
+// starting/stopping metronome. Used in the STATE_METRONOME and STATE_PRESET_EDIT states.
+static bool _handle_metronome_settings_buttons(void)
+{
+   bool lcd_update_required = false;
+    if (_buttons[BUTTON_UP].pressed)
+    {
+        // Increment BPM
+        if (MAX_BPM > _current_bpm)
+        {
+            lcd_update_required = true;
+            _current_bpm += 1u;
+            LOG_INFO("%u BPM", _current_bpm);
+        }
+
+        _buttons[BUTTON_UP].pressed = false;
+    }
+    else if (_buttons[BUTTON_DOWN].pressed)
+    {
+        // Decrement BPM
+        if (MIN_BPM < _current_bpm)
+        {
+            lcd_update_required = true;
+            _current_bpm -= 1u;
+            LOG_INFO("%u BPM", _current_bpm);
+        }
+
+        _buttons[BUTTON_DOWN].pressed = false;
+    }
+    else if (_buttons[BUTTON_LEFT].pressed)
+    {
+        // Decrement BPM
+        if (MIN_BEAT == _current_beat_count)
+        {
+            _current_beat_count = MAX_BEAT;
+        }
+        else
+        {
+            _current_beat_count -= 1u;
+        }
+
+        LOG_INFO("%u beats", _current_beat_count);
+        lcd_update_required = true;
+        _buttons[BUTTON_LEFT].pressed = false;
+    }
+    else if (_buttons[BUTTON_RIGHT].pressed)
+    {
+        // Decrement BPM
+        if (MAX_BEAT == _current_beat_count)
+        {
+            _current_beat_count = MIN_BEAT;
+        }
+        else
+        {
+            _current_beat_count += 1u;
+        }
+
+        LOG_INFO("%u beats", _current_beat_count);
+        lcd_update_required = true;
+        _buttons[BUTTON_RIGHT].pressed = false;
+    }
+    else if (_buttons[BUTTON_SELECT].pressed)
+    {
+        // Start/stop metronome
+        if (!_metronome_running)
+        {
+            // Start timer counting for current BPM
+            _tc4_set_period(_current_bpm);
+            _start_metronome();
+        }
+        else
+        {
+            _stop_metronome();
+        }
+
+        _buttons[BUTTON_SELECT].pressed = false;
+    }
+
+    return lcd_update_required;
+}
+
 // Handle button inputs on edit saved preset screen
 static bool _handle_preset_edit_inputs(void)
 {
+    bool lcd_update_required = false;
+    if (_buttons[BUTTON_ADD_DELETE].pressed || _buttons[BUTTON_MODE].pressed)
+    {
+        // Save current settings back to preset slot
+        _save_preset(&_presets.presets[_current_preset_index].settings);
+        LOG_INFO("finished editing preset %s", _presets.presets[_current_preset_index].name);
+
+        // Return to preset playback state
+        _stop_metronome();
+        _state_transition(STATE_PRESET_PLAYBACK);
+
+        _buttons[BUTTON_ADD_DELETE].pressed = false;
+        _buttons[BUTTON_MODE].pressed = false;
+    }
+    else
+    {
+        // handle buttons for changing beat & BPM, and for starting/stopping metronome
+        lcd_update_required = _handle_metronome_settings_buttons();
+    }
+
+    return lcd_update_required;
 }
 
 // Handle button inputs on the edit/delete preset menu screen
@@ -846,79 +918,8 @@ static bool _handle_preset_delete_inputs(void)
 static bool _handle_metronome_inputs(void)
 {
     bool lcd_update_required = false;
-    if (_buttons[BUTTON_UP].pressed)
-    {
-        // Increment BPM
-        if (MAX_BPM > _current_bpm)
-        {
-            lcd_update_required = true;
-            _current_bpm += 1u;
-            LOG_INFO("%u BPM", _current_bpm);
-        }
 
-        _buttons[BUTTON_UP].pressed = false;
-    }
-    else if (_buttons[BUTTON_DOWN].pressed)
-    {
-        // Decrement BPM
-        if (MIN_BPM < _current_bpm)
-        {
-            lcd_update_required = true;
-            _current_bpm -= 1u;
-            LOG_INFO("%u BPM", _current_bpm);
-        }
-
-        _buttons[BUTTON_DOWN].pressed = false;
-    }
-    else if (_buttons[BUTTON_LEFT].pressed)
-    {
-        // Decrement BPM
-        if (MIN_BEAT == _current_beat_count)
-        {
-            _current_beat_count = MAX_BEAT;
-        }
-        else
-        {
-            _current_beat_count -= 1u;
-        }
-
-        LOG_INFO("%u beats", _current_beat_count);
-        lcd_update_required = true;
-        _buttons[BUTTON_LEFT].pressed = false;
-    }
-    else if (_buttons[BUTTON_RIGHT].pressed)
-    {
-        // Decrement BPM
-        if (MAX_BEAT == _current_beat_count)
-        {
-            _current_beat_count = MIN_BEAT;
-        }
-        else
-        {
-            _current_beat_count += 1u;
-        }
-
-        LOG_INFO("%u beats", _current_beat_count);
-        lcd_update_required = true;
-        _buttons[BUTTON_RIGHT].pressed = false;
-    }
-    else if (_buttons[BUTTON_SELECT].pressed)
-    {
-        // Start/stop metronome
-        if (!_metronome_running)
-        {
-            // Start timer counting for current BPM
-            _tc4_set_period(_current_bpm);
-            _start_metronome();
-        }
-        else
-        {
-            _stop_metronome();
-        }
-
-        _buttons[BUTTON_SELECT].pressed = false;
-    }
-    else if (_buttons[BUTTON_MODE].pressed)
+    if (_buttons[BUTTON_MODE].pressed)
     {
         // Switch to preset state (also clears button states)
         _state_transition(STATE_PRESET_PLAYBACK);
@@ -946,6 +947,11 @@ static bool _handle_metronome_inputs(void)
         }
 
         lcd_update_required = true;
+    }
+    else
+    {
+        // handle buttons for changing beat & BPM, and for starting/stopping metronome
+        lcd_update_required = _handle_metronome_settings_buttons();
     }
 
     return lcd_update_required;
@@ -1131,7 +1137,7 @@ static bool _handle_name_entry_inputs(void)
     bool lcd_update_required = false;
     if (_buttons[BUTTON_MODE].pressed || _buttons[BUTTON_ADD_DELETE].pressed)
     {
-        // Switch to metronome state (also clears button states)
+        // Cancel, switch back to metronome state (also clears button states)
         _state_transition(STATE_METRONOME);
         lcd_update_required = true;
     }
