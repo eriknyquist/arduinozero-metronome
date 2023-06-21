@@ -36,6 +36,8 @@
  *   of changing immediately when the button is pressed, the preset will only be
  *   changed on the first beat of the next bar (i.e. the next beat #1).
  *
+ * - Saved presets can be deleted & edited
+ *
  * - Metronome beats are triggered by timer interrupts from TC4. Audio samples
  *   for metronome beats are streamed to the I2S DAC directly in the TC4 interrupt
  *   handler, using only the non-blocking versions of the I2S library functions.
@@ -48,7 +50,7 @@
  *
  * - UART-based command line interface allows full command/control of the metronome
  *   user interface by interacting with the serial port (this is just extra-- all
- *   features, including creating/naming/deleting presets, can be accessed via
+ *   features, including creating/naming/editing/deleting presets, can be accessed via
  *   buttons & character LCD on the device).
  */
 
@@ -56,6 +58,8 @@
 
 #include <Arduino_CRC32.h>
 #include <FlashStorage.h>
+#include <ArduinoLowPower.h>
+
 
 // Version number reported by CLI
 #define METRONOME_SKETCH_VERSION "0.0.1"
@@ -68,7 +72,7 @@
 
 // Only used for debugging, useful if testing something unrelated to
 // preset storage and want to avoid wasting flash write cycles
-#define ENABLE_FLASH_WRITE      (0u)
+#define ENABLE_FLASH_WRITE      (1u)
 
 // GPIO pin numbers for 20x4 character LCD (0, 1 and 9 are needed by I2S library).
 // 13 is the builtin LED, which is used to show when we are streaming samples to
@@ -188,6 +192,7 @@ typedef struct
 
 // Forward declaration of CLI command handlers
 static void _presets_cmd_handler(char *cmd_args);
+static void _poweroff_cmd_handler(char *cmd_args);
 static void _help_cmd_handler(char *cmd_args);
 static void _up_cmd_handler(char *cmd_args);
 static void _down_cmd_handler(char *cmd_args);
@@ -199,13 +204,14 @@ static void _add_del_cmd_handler(char *cmd_args);
 
 
 // Number of CLI commands we can handle (must be manually synced with _cli_commands)
-#define CLI_COMMAND_COUNT (9u)
+#define CLI_COMMAND_COUNT (10u)
 
 // Table mapping CLI command words to command handlers
 static cli_command_t _cli_commands[CLI_COMMAND_COUNT] =
 {
     {"help", _help_cmd_handler},
     {"presets", _presets_cmd_handler},
+    {"off", _poweroff_cmd_handler},
     {"u", _up_cmd_handler},
     {"d", _down_cmd_handler},
     {"l", _left_cmd_handler},
@@ -265,6 +271,8 @@ static volatile uint16_t _requested_preset_index = 0u;
 static volatile bool _preset_change_requested = false;
 static volatile bool _preset_change_complete = false;
 
+// Holds the CRC value for presets loaded from flash on boot
+static uint32_t _preset_crc_on_boot = 0u;
 
 // Table of alphanumeric characters, used for preset name entry. '<' represents
 // a backspace, '_' represents a space character, and '*' represents a 'done/save' button.
@@ -321,6 +329,47 @@ Arduino_CRC32 crc_generator;
 FlashStorage(preset_store, metronome_presets_t);
 
 
+// Disable all interrupts, set all pins to interrupts, and save presets to flash
+static void _power_off(void)
+{
+    LOG_INFO("powering off");
+
+    // Stop metronome timer, & disable TC4 interrupt request
+    _stop_metronome();
+    TC4->COUNT32.INTENSET.bit.MC0 = 0;
+    while (_tc4_syncing());
+
+    // Disable all GPIO interrupts and configure pins as floating inputs
+    for (unsigned int i = 0u; i < BUTTON_COUNT; i++)
+    {
+        pinMode(_buttons[i].gpio_pin, INPUT);
+        detachInterrupt(digitalPinToInterrupt(_buttons[i].gpio_pin));
+    }
+
+#if ENABLE_FLASH_WRITE
+    uint32_t new_crc = _calc_preset_crc();
+    if (_preset_crc_on_boot != new_crc)
+    {
+        LOG_INFO("saving presets");
+        _presets.crc = new_crc;
+        preset_store.write(_presets);
+    }
+    else
+    {
+        LOG_INFO("no change to presets");
+    }
+#endif // ENABLE_FLASH_WRITE
+
+#if ENABLE_UART_LOGGING || ENABLE_UART_CLI
+    // Disable serial
+    delay(500);
+    Serial.end();
+#endif // ENABLE_UART_LOGGING || ENABLE_UART_CLI
+
+    // Go into low power mode forever
+    LowPower.sleep();
+}
+
 // GPIO callback wrapper, initiates debounce for button pin if not already in progress
 static void _gpio_callback(button_e button)
 {
@@ -344,6 +393,7 @@ void _help_cmd_handler(char *cmd_args)
     Serial.println(METRONOME_SKETCH_VERSION);
     Serial.println("help     - Show this printout");
     Serial.println("presets  - Show all saved presets");
+    Serial.println("off      - Save presets to flash, power off device");
     Serial.println("u        - Inject UP button press");
     Serial.println("d        - Inject DOWN button press");
     Serial.println("l        - Inject LEFT button press");
@@ -366,6 +416,12 @@ static void _presets_cmd_handler(char *cmd_args)
         Serial.print(" 0x");
         Serial.println(_presets.presets[i].settings, HEX);
     }
+}
+
+// 'power off' CLI command handler
+static void _poweroff_cmd_handler(char *cmd_args)
+{
+    _power_off();
 }
 
 // Generic simulated button press CLI command handler
@@ -1290,7 +1346,6 @@ static bool _handle_inputs(void)
     return lcd_update_required;
 }
 
-
 void setup()
 {
 
@@ -1303,7 +1358,7 @@ void setup()
     // Configure button input pins
     for (unsigned int i = 0u; i < BUTTON_COUNT; i++)
     {
-        pinMode(_buttons[i].gpio_pin, INPUT);
+        pinMode(_buttons[i].gpio_pin, INPUT_PULLUP);
         attachInterrupt(digitalPinToInterrupt(_buttons[i].gpio_pin),
                                               _buttons[i].callback,
                                               (_buttons[i].pressed_state) ? RISING : FALLING);
@@ -1350,10 +1405,12 @@ void setup()
 #if ENABLE_FLASH_WRITE
         _presets.crc = _calc_preset_crc();
         preset_store.write(_presets);
+        _preset_crc_on_boot = _presets.crc;
 #endif // ENABLE_FLASH_WRITE
     }
     else
     {
+        _preset_crc_on_boot = stored_crc;
         LOG_INFO("%u presets stored", _presets.preset_count);
     }
 }
