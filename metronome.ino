@@ -329,7 +329,7 @@ Arduino_CRC32 crc_generator;
 FlashStorage(preset_store, metronome_presets_t);
 
 
-// Disable all interrupts, set all pins to interrupts, and save presets to flash
+// Disable all interrupts, set all pins to inputs, and save presets to flash
 static void _power_off(void)
 {
     LOG_INFO("powering off");
@@ -338,6 +338,9 @@ static void _power_off(void)
     _stop_metronome();
     TC4->COUNT32.INTENSET.bit.MC0 = 0;
     while (_tc4_syncing());
+
+    // Set builtin LED pin to floating input
+    pinMode(13, INPUT);
 
     // Disable all GPIO interrupts and configure pins as floating inputs
     for (unsigned int i = 0u; i < BUTTON_COUNT; i++)
@@ -595,7 +598,7 @@ static void _stream_beat_sound(void)
 }
 
 // Start streaming sound for non-first beat of bar
-static void _stream_subbeat_sound()
+static void _stream_subbeat_sound(void)
 {
     // TODO: implement
 }
@@ -763,6 +766,7 @@ static bool _handle_metronome_settings_buttons(void)
         {
             lcd_update_required = true;
             _current_bpm += 1u;
+            _tc4_set_period(_current_bpm);
             LOG_INFO("%u BPM", _current_bpm);
         }
 
@@ -775,6 +779,7 @@ static bool _handle_metronome_settings_buttons(void)
         {
             lcd_update_required = true;
             _current_bpm -= 1u;
+            _tc4_set_period(_current_bpm);
             LOG_INFO("%u BPM", _current_bpm);
         }
 
@@ -1364,14 +1369,12 @@ void setup()
                                               (_buttons[i].pressed_state) ? RISING : FALLING);
     }
 
-    // Configure TC4 to generate interrupts for metronome beat
+    // Configure TC4 as a 32-bit counter counting at 48MHz. TC4 is used to
+    // generate interrupts for the metronome beat.
     GCLK->CLKCTRL.reg = (uint16_t) (GCLK_CLKCTRL_CLKEN | GCLK_CLKCTRL_GEN_GCLK0 | GCLK_CLKCTRL_ID(GCM_TC4_TC5));
     while (GCLK->STATUS.bit.SYNCBUSY);
     _tc4_reset();
-    TC4->COUNT32.CTRLA.reg |= TC_CTRLA_MODE_COUNT32;
-    TC4->COUNT32.CTRLA.reg |= TC_CTRLA_WAVEGEN_MFRQ;
-    // Counting at 3MHz
-    TC4->COUNT32.CTRLA.reg |= TC_CTRLA_PRESCALER_DIV1;
+    TC4->COUNT32.CTRLA.reg |= (TC_CTRLA_MODE_COUNT32 | TC_CTRLA_WAVEGEN_MFRQ | TC_CTRLA_PRESCALER_DIV1);
 
     // Configure IRQ for TC4
     NVIC_DisableIRQ(TC4_IRQn);
