@@ -54,6 +54,8 @@
  *   buttons & character LCD on the device).
  */
 
+#include "metronome_beep_samples.h"
+
 #include <stdarg.h>
 
 #include <Arduino_CRC32.h>
@@ -258,6 +260,10 @@ static volatile uint16_t _current_bpm = 123u;
 static volatile uint16_t _current_beat_count = 4u;
 static volatile metronome_state_e _current_state = STATE_METRONOME;
 static volatile uint16_t _current_preset_index = 0u;
+
+// Stores the metronome BPM on metronome state exit, so we can
+// restore it when we return to the metronome state
+static volatile uint16_t _saved_metronome_bpm = _current_bpm;
 
 // Tracks whether metronome is running (in metronome mode)
 static volatile bool _metronome_running = false;
@@ -982,6 +988,8 @@ static bool _handle_metronome_inputs(void)
 
     if (_buttons[BUTTON_MODE].pressed)
     {
+        _saved_metronome_bpm = _current_bpm;
+
         // Switch to preset state (also clears button states)
         _state_transition(STATE_PRESET_PLAYBACK);
         lcd_update_required = true;
@@ -1088,6 +1096,7 @@ static bool _handle_preset_playback_inputs(void)
     {
         // Switch to metronome state (also clears button states)
         _state_transition(STATE_METRONOME);
+        _current_bpm = _saved_metronome_bpm;
         lcd_update_required = true;
     }
     else if (_buttons[BUTTON_ADD_DELETE].pressed)
