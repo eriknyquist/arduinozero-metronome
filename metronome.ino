@@ -58,6 +58,7 @@
 
 #include <stdarg.h>
 
+#include <I2S.h>
 #include <Arduino_CRC32.h>
 #include <FlashStorage.h>
 #include <ArduinoLowPower.h>
@@ -75,6 +76,10 @@
 // Only used for debugging, useful if testing something unrelated to
 // preset storage and want to avoid wasting flash write cycles
 #define ENABLE_FLASH_WRITE      (1u)
+
+// I2S sample rate and sample width
+#define SAMPLE_RATE (8000)
+#define SAMPLE_WIDTH (16)
 
 // GPIO pin numbers for 20x4 character LCD (0, 1 and 9 are needed by I2S library).
 // 13 is the builtin LED, which is used to show when we are streaming samples to
@@ -94,6 +99,8 @@
 #define SELECT_BUTTON_PIN       (A4)
 #define MODE_BUTTON_PIN         (A5)
 #define ADD_DEL_BUTTON_PIN      (A5)
+#define VOLUP_BUTTON_PIN        (10)
+#define VOLDOWN_BUTTON_PIN      (11)
 
 
 #define MAX_PRESET_NAME_LEN     (32u)   // Max. number of characters for a preset name string
@@ -136,6 +143,8 @@ typedef enum
     BUTTON_SELECT,
     BUTTON_MODE,
     BUTTON_ADD_DELETE,
+    BUTTON_VOLUP,
+    BUTTON_VOLDOWN,
     BUTTON_COUNT
 } button_e;
 
@@ -203,10 +212,12 @@ static void _right_cmd_handler(char *cmd_args);
 static void _select_cmd_handler(char *cmd_args);
 static void _mode_cmd_handler(char *cmd_args);
 static void _add_del_cmd_handler(char *cmd_args);
+static void _volup_cmd_handler(char *cmd_args);
+static void _voldown_cmd_handler(char *cmd_args);
 
 
 // Number of CLI commands we can handle (must be manually synced with _cli_commands)
-#define CLI_COMMAND_COUNT (10u)
+#define CLI_COMMAND_COUNT (12u)
 
 // Table mapping CLI command words to command handlers
 static cli_command_t _cli_commands[CLI_COMMAND_COUNT] =
@@ -220,7 +231,9 @@ static cli_command_t _cli_commands[CLI_COMMAND_COUNT] =
     {"r", _right_cmd_handler},
     {"s", _select_cmd_handler},
     {"m", _mode_cmd_handler},
-    {"a", _add_del_cmd_handler}
+    {"a", _add_del_cmd_handler},
+    {"+", _volup_cmd_handler},
+    {"-", _voldown_cmd_handler}
 };
 
 // Serial input buffer for CLI commands
@@ -241,6 +254,8 @@ void _right_button_callback(void) { _gpio_callback(BUTTON_RIGHT); }
 void _select_button_callback(void) { _gpio_callback(BUTTON_SELECT); }
 void _mode_button_callback(void) { _gpio_callback(BUTTON_MODE); }
 void _add_delete_button_callback(void) { _gpio_callback(BUTTON_ADD_DELETE); }
+void _volup_button_callback(void) { _gpio_callback(BUTTON_VOLUP); }
+void _voldown_button_callback(void) { _gpio_callback(BUTTON_VOLDOWN); }
 
 
 // State tracking/debouncing for all buttons
@@ -252,7 +267,9 @@ static volatile button_info_t _buttons[BUTTON_COUNT] =
     {false, LOW, DEBOUNCE_IDLE, 0u, _right_button_callback, RIGHT_BUTTON_PIN},        // BUTTON_RIGHT
     {false, LOW, DEBOUNCE_IDLE, 0u, _select_button_callback,  SELECT_BUTTON_PIN},     // BUTTON_SELECT
     {false, LOW, DEBOUNCE_IDLE, 0u, _mode_button_callback, MODE_BUTTON_PIN},          // BUTTON_MODE
-    {false, LOW, DEBOUNCE_IDLE, 0u, _add_delete_button_callback, ADD_DEL_BUTTON_PIN}  // BUTTON_ADD_DELETE
+    {false, LOW, DEBOUNCE_IDLE, 0u, _add_delete_button_callback, ADD_DEL_BUTTON_PIN}, // BUTTON_ADD_DELETE
+    {false, LOW, DEBOUNCE_IDLE, 0u, _volup_button_callback, MODE_BUTTON_PIN},         // BUTTON_VOLUP
+    {false, LOW, DEBOUNCE_IDLE, 0u, _voldown_button_callback, ADD_DEL_BUTTON_PIN}     // BUTTON_VOLDOWN
 };
 
 // Runtime values for BPM, beat count, metronome mode, and preset index
@@ -300,6 +317,13 @@ static unsigned int _alphanum_row = 0u;
 static char _preset_name_buf[MAX_PRESET_NAME_LEN];
 static unsigned int _preset_name_pos = 0u;
 
+// Buffers to hold high & low beep samples, modified for current volume level
+static int16_t _high_beep[BEEP_SAMPLE_COUNT];
+static int16_t _low_beep[BEEP_SAMPLE_COUNT];
+
+// Tracks current volume level as a percentage (0-100)
+static unsigned int _volume = 100u;
+
 
 #if ENABLE_UART_LOGGING
 #define LOG_INFO(fmt, ...) log("INFO", __func__, __LINE__, fmt, ##__VA_ARGS__)
@@ -334,6 +358,46 @@ Arduino_CRC32 crc_generator;
 // Flash storage object for preset saving
 FlashStorage(preset_store, metronome_presets_t);
 
+static void _reload_beep_samples(void)
+{
+    float volf = ((float) _volume) / 100.0f;
+    for (unsigned int i = 0u; i < BEEP_SAMPLE_COUNT; i++)
+    {
+        _high_beep[i] = (int16_t) (((float) high_beep_samples[i]) * volf);
+    }
+    for (unsigned int i = 0u; i < BEEP_SAMPLE_COUNT; i++)
+    {
+        _low_beep[i] = (int16_t) (((float) low_beep_samples[i]) * volf);
+    }
+}
+
+// Increment volume by 10%
+static bool _increment_volume(void)
+{
+    bool changed = false;
+    if (_volume <= 90u)
+    {
+        _volume += 10u;
+        _reload_beep_samples();
+        changed  = true;
+    }
+
+    return changed;
+}
+
+// Decrement volume by 10%
+static bool _decrement_volume(void)
+{
+    bool changed = false;
+    if (_volume >= 10u)
+    {
+        _volume -= 10u;
+        _reload_beep_samples();
+        changed = true;
+    }
+
+    return changed;
+}
 
 // Disable all interrupts, set all pins to inputs, and save presets to flash
 static void _power_off(void)
@@ -410,6 +474,8 @@ void _help_cmd_handler(char *cmd_args)
     Serial.println("s        - Inject SELECT button press");
     Serial.println("m        - Inject MODE button press");
     Serial.println("a        - Inject ADD/DEL button press");
+    Serial.println("+        - Increment volume");
+    Serial.println("-        - Decrement volume");
     Serial.println("----------------------------------------");
 }
 
@@ -448,6 +514,8 @@ static void _right_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_RIGH
 static void _select_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_SELECT); }
 static void _mode_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_MODE); }
 static void _add_del_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_ADD_DELETE); }
+static void _volup_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_VOLUP); }
+static void _voldown_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_VOLDOWN); }
 
 
 // Read CLI commands from serial port, and run command handlers if required
@@ -600,13 +668,13 @@ static void _update_char_lcd(void)
 // Start streaming sound for first beat of bar
 static void _stream_beat_sound(void)
 {
-    // TODO: implement
+    (void) I2S.write(_high_beep, BEEP_SAMPLE_COUNT);
 }
 
 // Start streaming sound for non-first beat of bar
 static void _stream_subbeat_sound(void)
 {
-    // TODO: implement
+    (void) I2S.write(_low_beep, BEEP_SAMPLE_COUNT);
 }
 
 // Called on TC4 interrupt, starts streaming the next beat to the I2S DAC
@@ -981,6 +1049,26 @@ static bool _handle_preset_delete_inputs(void)
     return lcd_update_required;
 }
 
+static bool _handle_volume_inputs(void)
+{
+    bool lcd_update_required = false;
+
+    if (_buttons[BUTTON_VOLUP].pressed)
+    {
+        lcd_update_required = _increment_volume();
+        _buttons[BUTTON_VOLUP].pressed = false;
+        LOG_INFO("volume: %u%%", _volume);
+    }
+    else if (_buttons[BUTTON_VOLDOWN].pressed)
+    {
+        lcd_update_required = _decrement_volume();
+        _buttons[BUTTON_VOLDOWN].pressed = false;
+        LOG_INFO("volume: %u%%", _volume);
+    }
+
+    return lcd_update_required;
+}
+
 // Handle button inputs on the metronome screen
 static bool _handle_metronome_inputs(void)
 {
@@ -1023,7 +1111,7 @@ static bool _handle_metronome_inputs(void)
         lcd_update_required = _handle_metronome_settings_buttons();
     }
 
-    return lcd_update_required;
+    return lcd_update_required || _handle_volume_inputs();
 }
 
 // Handle button inputs in "preset playback" mode
@@ -1402,6 +1490,13 @@ void setup()
     Serial.begin(115200);
 #endif // ENABLE_UART_LOGGING || ENABLE_UART_CLI
 
+    // Initialize I2S
+    if (!I2S.begin(I2S_PHILIPS_MODE , SAMPLE_RATE, SAMPLE_WIDTH))
+    {
+        LOG_ERROR("Failed to initialize I2S :(");
+        while (1); // do nothing forever
+    }
+
     LOG_INFO("Version "METRONOME_SKETCH_VERSION);
     LOG_INFO("preset store is %u bytes", sizeof(_presets));
     LOG_INFO("flash writes %s", (ENABLE_FLASH_WRITE) ? "enabled" : "disabled");
@@ -1425,6 +1520,8 @@ void setup()
         _preset_crc_on_boot = stored_crc;
         LOG_INFO("%u presets stored", _presets.preset_count);
     }
+
+    _reload_beep_samples();
 }
 
 void loop()
