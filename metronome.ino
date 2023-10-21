@@ -78,7 +78,7 @@
 #define ENABLE_FLASH_WRITE      (1u)
 
 // I2S sample rate and sample width
-#define SAMPLE_RATE (8000)
+#define SAMPLE_RATE (44100)
 #define SAMPLE_WIDTH (16)
 
 // GPIO pin numbers for 20x4 character LCD (0, 1 and 9 are needed by I2S library).
@@ -318,8 +318,10 @@ static char _preset_name_buf[MAX_PRESET_NAME_LEN];
 static unsigned int _preset_name_pos = 0u;
 
 // Buffers to hold high & low beep samples, modified for current volume level
-static int16_t _high_beep[BEEP_SAMPLE_COUNT];
-static int16_t _low_beep[BEEP_SAMPLE_COUNT];
+#define SAMPLE_BUF_LEN    (256u)
+static const int16_t *_beep_samples = high_beep_samples;
+static int16_t _sample_buf[SAMPLE_BUF_LEN];
+static volatile uint32_t _beep_samples_pos = 0u;
 
 // Tracks current volume level as a percentage (0-100)
 static unsigned int _volume = 100u;
@@ -358,19 +360,6 @@ Arduino_CRC32 crc_generator;
 // Flash storage object for preset saving
 FlashStorage(preset_store, metronome_presets_t);
 
-static void _reload_beep_samples(void)
-{
-    float volf = ((float) _volume) / 100.0f;
-    for (unsigned int i = 0u; i < BEEP_SAMPLE_COUNT; i++)
-    {
-        _high_beep[i] = (int16_t) (((float) high_beep_samples[i]) * volf);
-    }
-    for (unsigned int i = 0u; i < BEEP_SAMPLE_COUNT; i++)
-    {
-        _low_beep[i] = (int16_t) (((float) low_beep_samples[i]) * volf);
-    }
-}
-
 // Increment volume by 10%
 static bool _increment_volume(void)
 {
@@ -378,7 +367,6 @@ static bool _increment_volume(void)
     if (_volume <= 90u)
     {
         _volume += 10u;
-        _reload_beep_samples();
         changed  = true;
     }
 
@@ -392,7 +380,6 @@ static bool _decrement_volume(void)
     if (_volume >= 10u)
     {
         _volume -= 10u;
-        _reload_beep_samples();
         changed = true;
     }
 
@@ -665,16 +652,51 @@ static void _update_char_lcd(void)
     }
 }
 
+static void _send_onebuf_silence(void)
+{
+    static uint16_t silence[SAMPLE_BUF_LEN] = {0u};
+    I2S.write(silence, sizeof(silence));
+}
+
+// Handler to run whenever an I2S transmission completes
+static void _i2s_complete_handler(void)
+{
+    static volatile bool silence_sent = false;
+    if (_beep_samples_pos >= BEEP_SAMPLE_COUNT)
+    {
+        if (!silence_sent)
+        {
+            _send_onebuf_silence();
+            silence_sent = true;
+        }
+        // Done
+        return;
+    }
+
+    silence_sent = false;
+    uint32_t samples_remaining = BEEP_SAMPLE_COUNT - _beep_samples_pos;
+    uint32_t samples_to_send = min(samples_remaining, SAMPLE_BUF_LEN);
+    memcpy(_sample_buf, _beep_samples + _beep_samples_pos, sizeof(_sample_buf));
+    (void) I2S.write(_sample_buf, sizeof(_sample_buf));
+    _beep_samples_pos += samples_to_send;
+}
+
 // Start streaming sound for first beat of bar
 static void _stream_beat_sound(void)
 {
-    (void) I2S.write(_high_beep, BEEP_SAMPLE_COUNT);
+    _beep_samples_pos = 0u;
+    _beep_samples = high_beep_samples;
+    _send_onebuf_silence();
+    _i2s_complete_handler();
 }
 
 // Start streaming sound for non-first beat of bar
 static void _stream_subbeat_sound(void)
 {
-    (void) I2S.write(_low_beep, BEEP_SAMPLE_COUNT);
+    _beep_samples_pos = 0u;
+    _beep_samples = low_beep_samples;
+    _send_onebuf_silence();
+    _i2s_complete_handler();
 }
 
 // Called on TC4 interrupt, starts streaming the next beat to the I2S DAC
@@ -736,6 +758,9 @@ void TC4_Handler(void)
 // Start metronome with current settings (enable timer interrupt)
 static void _start_metronome(void)
 {
+    // Reset beat count
+    _current_beat = 0u;
+
     // Start timer/counter, if runnning
     if ((TC4->COUNT32.CTRLA.reg & TC_CTRLA_ENABLE) == 0u)
     {
@@ -1119,12 +1144,6 @@ static bool _handle_preset_playback_inputs(void)
 {
     bool lcd_update_required = false;
 
-    if (_preset_change_complete)
-    {
-        LOG_INFO("loaded preset '%s'", _presets.presets[_current_preset_index].name);
-        _preset_change_complete = false;
-    }
-
     if (_buttons[BUTTON_UP].pressed)
     {
         unsigned int new_index = (_current_preset_index + 1u) % _presets.preset_count;
@@ -1491,6 +1510,7 @@ void setup()
 #endif // ENABLE_UART_LOGGING || ENABLE_UART_CLI
 
     // Initialize I2S
+    I2S.onTransmit(_i2s_complete_handler);
     if (!I2S.begin(I2S_PHILIPS_MODE , SAMPLE_RATE, SAMPLE_WIDTH))
     {
         LOG_ERROR("Failed to initialize I2S :(");
@@ -1520,8 +1540,6 @@ void setup()
         _preset_crc_on_boot = stored_crc;
         LOG_INFO("%u presets stored", _presets.preset_count);
     }
-
-    _reload_beep_samples();
 }
 
 void loop()
@@ -1529,6 +1547,12 @@ void loop()
 #if ENABLE_UART_CLI
     _handle_cli_commands();
 #endif // ENABLE_UART_CLI
+
+    if (_preset_change_complete)
+    {
+        LOG_INFO("loaded preset '%s'", _presets.presets[_current_preset_index].name);
+        _preset_change_complete = false;
+    }
 
     if (_handle_inputs())
     {
