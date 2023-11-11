@@ -55,10 +55,10 @@
  */
 
 #include "metronome_beep_samples.h"
+#include "ModifiedI2S.h"
 
 #include <stdarg.h>
 
-#include <I2S.h>
 #include <Arduino_CRC32.h>
 #include <FlashStorage.h>
 #include <ArduinoLowPower.h>
@@ -286,7 +286,7 @@ static volatile uint16_t _saved_metronome_bpm = _current_bpm;
 static volatile bool _metronome_running = false;
 
 // Tracks current beat in bar
-static volatile uint16_t _current_beat = 0u;
+static volatile uint16_t _current_beat = MIN_BEAT;
 
 
 // Tracks requested preset index (we only load in a new preset before the first beat of the bar)
@@ -317,10 +317,24 @@ static unsigned int _alphanum_row = 0u;
 static char _preset_name_buf[MAX_PRESET_NAME_LEN];
 static unsigned int _preset_name_pos = 0u;
 
-// Buffers to hold high & low beep samples, modified for current volume level
-#define SAMPLE_BUF_LEN    (256u)
+// Number of samples we can send to the HiLetgo PCM5102 I2S DAC
+// in one go without it blocking on us
+#define SAMPLE_BUF_LEN       (256u)
+
+// Number of buffers of silence (all 0s) to send at the beginning
+// and end of each beep sample we send to the HiLetgo PCM5102 I2S DAC
+#define NUM_I2S_SILENCE_BUFS (2)
+
+// Pointer to the full list of stereo WAV samples for the beep sound currently
+// being streamed to the HiLetgo PCM5102 I2S DAC (high beep or low beep)
 static const int16_t *_beep_samples = high_beep_samples;
+
+// Sample buffer passed to I2S.write(). We stream a beep sound
+// to the HiLetgo PCM5102 I2S DAC in SAMPLE_BUF_LEN-sized chunks
+// via this buffer.
 static int16_t _sample_buf[SAMPLE_BUF_LEN];
+
+// Current position (start of next chunk to stream) within _beep_samples
 static volatile uint32_t _beep_samples_pos = 0u;
 
 // Tracks current volume level as a percentage (0-100)
@@ -655,29 +669,42 @@ static void _update_char_lcd(void)
 static void _send_onebuf_silence(void)
 {
     static uint16_t silence[SAMPLE_BUF_LEN] = {0u};
-    I2S.write(silence, sizeof(silence));
+    ModifiedI2S.write(silence, sizeof(silence));
 }
 
 // Handler to run whenever an I2S transmission completes
 static void _i2s_complete_handler(void)
 {
-    static volatile int silence_sent = 0;
-    if (_beep_samples_pos >= BEEP_SAMPLE_COUNT)
+    static volatile int silence_bufs_sent = 0;
+
+    bool in_silence_endbuf = (_beep_samples_pos >= BEEP_SAMPLE_COUNT);
+    bool in_silence_startbuf = (_beep_samples_pos == 0u);
+
+    if (in_silence_startbuf || in_silence_endbuf)
     {
-        if (silence_sent < 2)
+        if (silence_bufs_sent < NUM_I2S_SILENCE_BUFS)
         {
             _send_onebuf_silence();
-            silence_sent += 1;
+            silence_bufs_sent += 1u;
+            return;
         }
-        // Done
-        return;
+        else
+        {
+            // Finished with silence buffers
+            silence_bufs_sent = 0u;
+
+            if (in_silence_endbuf)
+            {
+                // If this was the end silence buffer, then we're done with I2S transfers
+                return;
+            }
+        }
     }
 
-    silence_sent = 0;
     uint32_t samples_remaining = BEEP_SAMPLE_COUNT - _beep_samples_pos;
     uint32_t samples_to_send = min(samples_remaining, SAMPLE_BUF_LEN);
     memcpy(_sample_buf, _beep_samples + _beep_samples_pos, sizeof(_sample_buf));
-    (void) I2S.write(_sample_buf, sizeof(_sample_buf));
+    (void) ModifiedI2S.write(_sample_buf, sizeof(_sample_buf));
     _beep_samples_pos += samples_to_send;
 }
 
@@ -686,8 +713,8 @@ static void _stream_beat_sound(void)
 {
     _beep_samples_pos = 0u;
     _beep_samples = high_beep_samples;
-    _send_onebuf_silence();
-    _send_onebuf_silence();
+    _i2s_complete_handler();
+    _i2s_complete_handler();
 }
 
 // Start streaming sound for non-first beat of bar
@@ -695,8 +722,8 @@ static void _stream_subbeat_sound(void)
 {
     _beep_samples_pos = 0u;
     _beep_samples = low_beep_samples;
-    _send_onebuf_silence();
-    _send_onebuf_silence();
+    _i2s_complete_handler();
+    _i2s_complete_handler();
 }
 
 // Called on TC4 interrupt, starts streaming the next beat to the I2S DAC
@@ -704,7 +731,7 @@ void _start_streaming_next_beat(void)
 {
     unsigned long now = millis();
 
-    if (1u == _current_beat)
+    if (MIN_BEAT == _current_beat)
     {
         // First beat of bar, check if preset change was requested
         if (_preset_change_requested)
@@ -725,7 +752,7 @@ void _start_streaming_next_beat(void)
 
     if (_current_beat_count == _current_beat)
     {
-        _current_beat = 1u;
+        _current_beat = MIN_BEAT;
     }
     else
     {
@@ -759,7 +786,7 @@ void TC4_Handler(void)
 static void _start_metronome(void)
 {
     // Reset beat count
-    _current_beat = 0u;
+    _current_beat = 1u;
 
     // Start timer/counter, if runnning
     if ((TC4->COUNT32.CTRLA.reg & TC_CTRLA_ENABLE) == 0u)
@@ -1510,13 +1537,12 @@ void setup()
 #endif // ENABLE_UART_LOGGING || ENABLE_UART_CLI
 
     // Initialize I2S
-    I2S.onTransmit(_i2s_complete_handler);
-    if (!I2S.begin(I2S_PHILIPS_MODE , SAMPLE_RATE, SAMPLE_WIDTH))
+    ModifiedI2S.onTransmit(_i2s_complete_handler);
+    if (!ModifiedI2S.begin(I2S_PHILIPS_MODE , SAMPLE_RATE, SAMPLE_WIDTH))
     {
         LOG_ERROR("Failed to initialize I2S :(");
-        while (1); // do nothing forever
+        while (1) {}; // Loop forever
     }
-
     LOG_INFO("Version "METRONOME_SKETCH_VERSION);
     LOG_INFO("preset store is %u bytes", sizeof(_presets));
     LOG_INFO("flash writes %s", (ENABLE_FLASH_WRITE) ? "enabled" : "disabled");
