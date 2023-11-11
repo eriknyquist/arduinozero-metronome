@@ -323,7 +323,7 @@ static unsigned int _preset_name_pos = 0u;
 
 // Number of buffers of silence (all 0s) to send at the beginning
 // and end of each beep sample we send to the HiLetgo PCM5102 I2S DAC
-#define NUM_I2S_SILENCE_BUFS (3)
+#define NUM_I2S_SILENCE_BUFS (1)
 
 // Pointer to the full list of stereo WAV samples for the beep sound currently
 // being streamed to the HiLetgo PCM5102 I2S DAC (high beep or low beep)
@@ -734,18 +734,19 @@ void _start_streaming_next_beat(void)
 {
     unsigned long now = millis();
 
-    if (MIN_BEAT == _current_beat)
+    if ((MIN_BEAT == _current_beat) && _preset_change_requested)
     {
         // First beat of bar, check if preset change was requested
-        if (_preset_change_requested)
-        {
-            _load_preset(_presets.presets[_requested_preset_index].settings);
-            _tc4_set_period(_current_bpm);
-            _current_preset_index = _requested_preset_index;
-            _preset_change_requested = false;
-            _preset_change_complete = true;
-        }
+        _load_preset(_presets.presets[_requested_preset_index].settings);
+        _current_preset_index = _requested_preset_index;
+        _preset_change_requested = false;
+        _preset_change_complete = true;
+    }
 
+    _tc4_set_period(_current_bpm);
+
+    if (MIN_BEAT == _current_beat)
+    {
         _stream_beat_sound();
     }
     else
@@ -753,7 +754,7 @@ void _start_streaming_next_beat(void)
         _stream_subbeat_sound();
     }
 
-    if (_current_beat_count == _current_beat)
+    if (_current_beat_count <= _current_beat)
     {
         _current_beat = MIN_BEAT;
     }
@@ -789,7 +790,7 @@ void TC4_Handler(void)
 static void _start_metronome(void)
 {
     // Reset beat count
-    _current_beat = 1u;
+    _current_beat = MIN_BEAT;
 
     // Start timer/counter, if runnning
     if ((TC4->COUNT32.CTRLA.reg & TC_CTRLA_ENABLE) == 0u)
@@ -895,7 +896,6 @@ static bool _handle_metronome_settings_buttons(void)
         {
             lcd_update_required = true;
             _current_bpm += 1u;
-            _tc4_set_period(_current_bpm);
             LOG_INFO("%u BPM", _current_bpm);
         }
 
@@ -908,7 +908,6 @@ static bool _handle_metronome_settings_buttons(void)
         {
             lcd_update_required = true;
             _current_bpm -= 1u;
-            _tc4_set_period(_current_bpm);
             LOG_INFO("%u BPM", _current_bpm);
         }
 
@@ -916,7 +915,7 @@ static bool _handle_metronome_settings_buttons(void)
     }
     else if (_buttons[BUTTON_LEFT].pressed)
     {
-        // Decrement BPM
+        // Decrement beat count
         if (MIN_BEAT == _current_beat_count)
         {
             _current_beat_count = MAX_BEAT;
@@ -932,7 +931,7 @@ static bool _handle_metronome_settings_buttons(void)
     }
     else if (_buttons[BUTTON_RIGHT].pressed)
     {
-        // Decrement BPM
+        // Decrement beat count
         if (MAX_BEAT == _current_beat_count)
         {
             _current_beat_count = MIN_BEAT;
