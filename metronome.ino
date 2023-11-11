@@ -661,19 +661,19 @@ static void _send_onebuf_silence(void)
 // Handler to run whenever an I2S transmission completes
 static void _i2s_complete_handler(void)
 {
-    static volatile bool silence_sent = false;
+    static volatile int silence_sent = 0;
     if (_beep_samples_pos >= BEEP_SAMPLE_COUNT)
     {
-        if (!silence_sent)
+        if (silence_sent < 2)
         {
             _send_onebuf_silence();
-            silence_sent = true;
+            silence_sent += 1;
         }
         // Done
         return;
     }
 
-    silence_sent = false;
+    silence_sent = 0;
     uint32_t samples_remaining = BEEP_SAMPLE_COUNT - _beep_samples_pos;
     uint32_t samples_to_send = min(samples_remaining, SAMPLE_BUF_LEN);
     memcpy(_sample_buf, _beep_samples + _beep_samples_pos, sizeof(_sample_buf));
@@ -687,7 +687,7 @@ static void _stream_beat_sound(void)
     _beep_samples_pos = 0u;
     _beep_samples = high_beep_samples;
     _send_onebuf_silence();
-    _i2s_complete_handler();
+    _send_onebuf_silence();
 }
 
 // Start streaming sound for non-first beat of bar
@@ -696,7 +696,7 @@ static void _stream_subbeat_sound(void)
     _beep_samples_pos = 0u;
     _beep_samples = low_beep_samples;
     _send_onebuf_silence();
-    _i2s_complete_handler();
+    _send_onebuf_silence();
 }
 
 // Called on TC4 interrupt, starts streaming the next beat to the I2S DAC
