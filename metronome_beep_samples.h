@@ -7107,8 +7107,8 @@ const int16_t high_beep_samples[BEEP_SAMPLE_COUNT] =
     2,
     -2,
     -3,
-    0,
-    0,
+    -1,
+    -1,
     0,
 };
 

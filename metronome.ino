@@ -323,7 +323,7 @@ static unsigned int _preset_name_pos = 0u;
 
 // Number of buffers of silence (all 0s) to send at the beginning
 // and end of each beep sample we send to the HiLetgo PCM5102 I2S DAC
-#define NUM_I2S_SILENCE_BUFS (2)
+#define NUM_I2S_SILENCE_BUFS (3)
 
 // Pointer to the full list of stereo WAV samples for the beep sound currently
 // being streamed to the HiLetgo PCM5102 I2S DAC (high beep or low beep)
@@ -672,15 +672,22 @@ static void _send_onebuf_silence(void)
     ModifiedI2S.write(silence, sizeof(silence));
 }
 
-// Handler to run whenever an I2S transmission completes
 static void _i2s_complete_handler(void)
 {
     static volatile int silence_bufs_sent = 0;
 
-    bool in_silence_endbuf = (_beep_samples_pos >= BEEP_SAMPLE_COUNT);
-    bool in_silence_startbuf = (_beep_samples_pos == 0u);
+    if (_beep_samples_pos >= BEEP_SAMPLE_COUNT)
+    {
+        if (0 == ModifiedI2S.remainingBytesToTransmit())
+        {
+            // done with I2S transfers for this beep sound
+            ModifiedI2S.disable();
+        }
 
-    if (in_silence_startbuf || in_silence_endbuf)
+        return;
+    }
+
+    else if (_beep_samples == 0u)
     {
         if (silence_bufs_sent < NUM_I2S_SILENCE_BUFS)
         {
@@ -692,12 +699,6 @@ static void _i2s_complete_handler(void)
         {
             // Finished with silence buffers
             silence_bufs_sent = 0u;
-
-            if (in_silence_endbuf)
-            {
-                // If this was the end silence buffer, then we're done with I2S transfers
-                return;
-            }
         }
     }
 
@@ -713,6 +714,7 @@ static void _stream_beat_sound(void)
 {
     _beep_samples_pos = 0u;
     _beep_samples = high_beep_samples;
+    ModifiedI2S.enable();
     _i2s_complete_handler();
     _i2s_complete_handler();
 }
@@ -722,6 +724,7 @@ static void _stream_subbeat_sound(void)
 {
     _beep_samples_pos = 0u;
     _beep_samples = low_beep_samples;
+    ModifiedI2S.enable();
     _i2s_complete_handler();
     _i2s_complete_handler();
 }
@@ -1543,6 +1546,8 @@ void setup()
         LOG_ERROR("Failed to initialize I2S :(");
         while (1) {}; // Loop forever
     }
+    ModifiedI2S.disable();
+
     LOG_INFO("Version "METRONOME_SKETCH_VERSION);
     LOG_INFO("preset store is %u bytes", sizeof(_presets));
     LOG_INFO("flash writes %s", (ENABLE_FLASH_WRITE) ? "enabled" : "disabled");

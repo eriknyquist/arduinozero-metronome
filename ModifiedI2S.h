@@ -66,6 +66,10 @@ public:
 
   void setBufferSize(int bufferSize);
 
+  void enable();
+  void disable();
+  int remainingBytesToTransmit();
+
 private:
   int begin(int mode, long sampleRate, int bitsPerSample, bool driveClock);
 

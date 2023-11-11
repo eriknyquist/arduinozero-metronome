@@ -401,6 +401,28 @@ void ModifiedI2SClass::setBufferSize(int bufferSize)
   _doubleBuffer.setSize(bufferSize);
 }
 
+void ModifiedI2SClass::enable()
+{
+  GCLK->CLKCTRL.bit.CLKEN = 1;
+  while (GCLK->STATUS.bit.SYNCBUSY);
+
+  i2sd.enable();
+}
+
+void ModifiedI2SClass::disable()
+{
+  GCLK->CLKCTRL.bit.CLKEN = 0;
+  while (GCLK->STATUS.bit.SYNCBUSY);
+
+  i2sd.disable();
+
+}
+
+int ModifiedI2SClass::remainingBytesToTransmit()
+{
+    return _doubleBuffer.available();
+}
+
 void ModifiedI2SClass::enableClock(int divider)
 {
   int div = SystemCoreClock / divider;
