@@ -35,7 +35,7 @@ Features
 * Supports browsing/selecting presets by name.
 
 * Supports switching to the next preset with a single button push, seamlessly
-  (no matter when you press the button, the preset will not actualy change until
+  (no matter when you press the button, the preset change will not be applied until
   the first beat of the next bar).
 
 * Arduino Zero internal flash (where all preset data is stored) is *only* written
