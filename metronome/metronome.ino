@@ -1,6 +1,5 @@
 /*
  * Arduino Zero Stage Metronome
- *
  * Erik K. Nyquist 2023
  *
  * Hardware:

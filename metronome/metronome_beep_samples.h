@@ -1,3 +1,18 @@
+/**
+ * metronome_beep_samples.h
+ * Erik K. Nyquist 2023
+ *
+ * This file contains audio data recorded from a Korg TM60 digital metronome/tuner
+ * at 44.1 KHz (16-bit, stereo), encoded as arrays of int16_t values.
+ *
+ * high_beep_samples contains the samples for the high-pitched beep/click sound.
+ *
+ * low_beep_samples contains the samples for the low-pitched beep/click sound.
+ *
+ * Both the high-pitched and low-pitched beep/click sounds are the same number of
+ * samples (#BEEP_SAMPLE_COUNT).
+ */
+
 #ifndef METRONOME_BEEP_SAMPLES_H
 #define METRONOME_BEEP_SAMPLES_H
 

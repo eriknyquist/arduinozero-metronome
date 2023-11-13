@@ -1,3 +1,9 @@
+# Preset backup script for Arduino Zero Stage Metronome
+# Erik K. Nyquist 2023
+#
+# A CLI tool for saving/loading preset data to/from an Arduino Zero Stage Metronome
+# via serial port
+
 import sys
 import argparse
 
@@ -38,6 +44,9 @@ def _metronome_version_check(ser):
     return None
 
 def _load_preset_data(ser, filename):
+    """
+    Reads preset data from 'filename' and loads it to connected metronome
+    """
     with open(filename, 'r') as fh:
         lines = fh.readlines()
 
@@ -116,4 +125,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

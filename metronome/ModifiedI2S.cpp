@@ -14,6 +14,17 @@
   You should have received a copy of the GNU Lesser General Public
   License along with this library; if not, write to the Free Software
   Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+
+
+  Modified by Erik K. Nyquist for the Arduino Zero Stage Metronome project. These
+  changes were found to be needed in order to ensure clean playback of metronome
+  beep sounds without any unpleasant pops/clicks. Specifically, disabling the I2S
+  hardware via 'i2sd.disable()' after all samples for a sound have been sent
+  seemed to eliminate unwanted artifacts.
+
+  * Renamed I2S class to ModifiedI2S so as not to be confused with original I2S lib
+  * Added ModifiedI2S.enable(), ModifiedI2S.disable(), and
+    ModifiedI2S.remainingBytesToTransmit() functions.
 */
 
 #include <Arduino.h>
