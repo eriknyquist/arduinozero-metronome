@@ -23,8 +23,8 @@ important. I want a dedicated metronome.
 Features
 ========
 
-* High-quality 44.1KHz click sounds recorded directly from a Korg TM60 digital metronome
-  (Stored on Arduino Zero internal flash, no external storage required).
+* Uses high-quality 44.1KHz click sounds recorded directly from a Korg TM60 digital
+  metronome (Stored on Arduino Zero internal flash, no external storage required).
 
 * Supports up to 512 BPM (beats per minute), and up to 16 beats per bar.
 
@@ -37,6 +37,12 @@ Features
 * Supports switching to the next preset with a single button push, seamlessly
   (no matter when you press the button, the preset change will not be applied until
   the first beat of the next bar).
+
+* Can be fully remotely/programatically controlled; all button presses can be "emulated"
+  by sending serial commands to the Arduino Zero's serial port.
+
+* Supports dumping/loading saved presets via the Arduino Zero's serial port. This
+  makes it easy to migrate all your saved presets to another device.
 
 * Arduino Zero internal flash (where all preset data is stored) is *only* written
   to when the device is powered off with a toggle switch, and only if any preset

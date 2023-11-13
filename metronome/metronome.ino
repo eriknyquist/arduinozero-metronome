@@ -203,6 +203,7 @@ typedef struct
 
 // Forward declaration of CLI command handlers
 static void _presets_cmd_handler(char *cmd_args);
+static void _addpreset_cmd_handler(char *cmd_args);
 static void _poweroff_cmd_handler(char *cmd_args);
 static void _help_cmd_handler(char *cmd_args);
 static void _up_cmd_handler(char *cmd_args);
@@ -217,13 +218,14 @@ static void _voldown_cmd_handler(char *cmd_args);
 
 
 // Number of CLI commands we can handle (must be manually synced with _cli_commands)
-#define CLI_COMMAND_COUNT (12u)
+#define CLI_COMMAND_COUNT (13u)
 
 // Table mapping CLI command words to command handlers
 static cli_command_t _cli_commands[CLI_COMMAND_COUNT] =
 {
     {"help", _help_cmd_handler},
     {"presets", _presets_cmd_handler},
+    {"addpreset", _addpreset_cmd_handler},
     {"off", _poweroff_cmd_handler},
     {"u", _up_cmd_handler},
     {"d", _down_cmd_handler},
@@ -465,32 +467,149 @@ void _help_cmd_handler(char *cmd_args)
     Serial.println("-------- CLI command reference ---------");
     Serial.print("Version ");
     Serial.println(METRONOME_SKETCH_VERSION);
-    Serial.println("help     - Show this printout");
-    Serial.println("presets  - Show all saved presets");
-    Serial.println("off      - Save presets to flash, power off device");
-    Serial.println("u        - Inject UP button press");
-    Serial.println("d        - Inject DOWN button press");
-    Serial.println("l        - Inject LEFT button press");
-    Serial.println("r        - Inject RIGHT button press");
-    Serial.println("s        - Inject SELECT button press");
-    Serial.println("m        - Inject MODE button press");
-    Serial.println("a        - Inject ADD/DEL button press");
-    Serial.println("+        - Increment volume");
-    Serial.println("-        - Decrement volume");
+    Serial.println("help      - Show this printout.");
+    Serial.println("presets   - Show all saved presets.");
+    Serial.println("addpreset - Create new preset. One line of output");
+    Serial.println("            from the 'presets' command should be passed");
+    Serial.println("            as parameter(s).");
+    Serial.println("off       - Save presets to flash, power off device.");
+    Serial.println("u         - Emulate UP button press.");
+    Serial.println("d         - Emulate DOWN button press.");
+    Serial.println("l         - Emulate LEFT button press.");
+    Serial.println("r         - Emulate RIGHT button press.");
+    Serial.println("s         - Emulate SELECT button press.");
+    Serial.println("m         - Emulate MODE button press.");
+    Serial.println("a         - Emulate ADD/DEL button press.");
+    Serial.println("+         - Emulate 'volume up' button press");
+    Serial.println("-         - Emulate 'volume down' button press");
     Serial.println("----------------------------------------");
 }
 
 // 'dump presets' CLI command handler
 static void _presets_cmd_handler(char *cmd_args)
 {
+    if (0u == _presets.preset_count)
+    {
+        Serial.println("No presets saved");
+        return;
+    }
+
     for (unsigned int i = 0u; i < _presets.preset_count; i++)
     {
         Serial.print("preset #");
         Serial.print(i);
         Serial.print(": ");
-        Serial.print(_presets.presets[i].name);
-        Serial.print(" 0x");
-        Serial.println(_presets.presets[i].settings, HEX);
+        Serial.print("0x");
+        Serial.print(_presets.presets[i].settings, HEX);
+        Serial.print(" ");
+        Serial.println(_presets.presets[i].name);
+    }
+}
+
+// 'add new preset' CLI command handler
+static void _addpreset_cmd_handler(char *cmd_args)
+{
+    bool valid_preset_found = false;
+    bool asciizero_seen = false;
+
+    if (MAX_PRESET_COUNT <= _presets.preset_count)
+    {
+        Serial.println("No more room for presets");
+        return;
+    }
+
+    // Look for the '0x' at the start of a preset data string
+    while (*cmd_args)
+    {
+        if (asciizero_seen)
+        {
+            if ((*cmd_args == 'x') || (*cmd_args == 'X'))
+            {
+                cmd_args++;
+                break;
+            }
+            else
+            {
+                asciizero_seen = false;
+            }
+        }
+        else
+        {
+            if (*cmd_args == '0')
+            {
+                asciizero_seen = true;
+            }
+        }
+
+        cmd_args++;
+    }
+
+    // If we found '0x' before the end of the string...
+    if (*cmd_args)
+    {
+        char numbuf[5];
+        bool valid_hex_seen = false;
+        // There should be no more than 4 hex chars, followed by a space
+        for (int i = 0; i < 5; i++)
+        {
+            char c = cmd_args[i];
+            if (((c <= 'F') && (c >= 'A')) ||
+                ((c <= 'f') && (c >= 'a')) ||
+                ((c <= '9') && (c >= '0')))
+            {
+                numbuf[i] = c;
+            }
+            else if ((c == ' ') && (i > 0))
+            {
+                numbuf[i] = '\0';
+                valid_hex_seen = true;
+                cmd_args += i + 1;
+                break;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        if (valid_hex_seen && *cmd_args)
+        {
+            char *endptr = NULL;
+            unsigned long preset_data = strtoul(numbuf, &endptr, 16);
+            if (endptr && (*endptr == '\0'))
+            {
+                metronome_preset_t *preset_slot = &_presets.presets[_presets.preset_count];
+                for (int i = 0; (i < sizeof(preset_slot->name)) && *cmd_args; i++, cmd_args++)
+                {
+                    if (*cmd_args == '\n')
+                    {
+                        preset_slot->name[i] = '\0';
+                        break;
+                    }
+
+                    preset_slot->name[i] = *cmd_args;
+                }
+
+                if (!*cmd_args)
+                {
+                    // Ensure null-terminated if name was too long
+                    preset_slot->name[sizeof(preset_slot->name) - 1] = '\0';
+                }
+
+                preset_slot->settings = (uint16_t) preset_data;
+                _presets.preset_count += 1u;
+                valid_preset_found = true;
+
+                Serial.print("Added preset '");
+                Serial.print(preset_slot->name);
+                Serial.println("'");
+            }
+        }
+    }
+
+    if (!valid_preset_found)
+    {
+        Serial.println("Invalid preset data provided");
     }
 }
 
@@ -558,6 +677,7 @@ static void _handle_cli_commands(void)
         return;
     }
 
+    // Find the end of the command word
     unsigned int cmd_word_end = 0u;
     for (; cmd_word_end < sizeof(_cli_buf); cmd_word_end++)
     {
@@ -568,12 +688,13 @@ static void _handle_cli_commands(void)
         }
     }
 
+    // Look for a command matching this command word in _cli_commands
     bool recognized_command = false;
     for (unsigned int i = 0u; i < CLI_COMMAND_COUNT; i++)
     {
         if (0 == strncmp(_cli_commands[i].cmd_word, _cli_buf, sizeof(_cli_buf)))
         {
-            // Run handler
+            // Run handler, pass a pointer to the characters after the command word
             recognized_command = true;
             _cli_commands[i].cmd_handler(_cli_buf + cmd_word_end + 1u);
             break;
@@ -598,22 +719,17 @@ static uint32_t _calc_preset_crc(void)
     return crc_generator.calc((uint8_t *) &_presets, sizeof(_presets));
 }
 
-// Save current BPM and beat count to a preset slot
-static bool _save_preset(uint16_t *preset)
+// Pack current BPM and beat count into a preset slot
+static void _save_preset(uint16_t *preset, uint16_t *bpm, uint16_t *beat_count)
 {
-    if (MAX_PRESET_COUNT <= _presets.preset_count)
-    {
-        return false;
-    }
-
-    *preset = ((_current_bpm - 1u) & 0x1FFu) | (((_current_beat_count - 1u) & 0xFu) << 0x9u);
+    *preset = ((*bpm - 1u) & 0x1FFu) | (((*beat_count - 1u) & 0xFu) << 0x9u);
 }
 
 // Populate current BPM and beat count from a saved preset slot
-static void _load_preset(uint16_t preset)
+static void _load_preset(uint16_t preset_data, uint16_t *bpm, uint16_t *beat_count)
 {
-    _current_bpm = ((preset) & 0x1FFu) + 1u;
-    _current_beat_count = (((preset) >> 9u) & 0xFu) + 1u;
+    *bpm = ((preset_data) & 0x1FFu) + 1u;
+    *beat_count = (((preset_data) >> 9u) & 0xFu) + 1u;
 }
 
 // Delete a preset from the RAM copy, by 0-based preset index
@@ -737,7 +853,9 @@ void _start_streaming_next_beat(void)
     if ((MIN_BEAT == _current_beat) && _preset_change_requested)
     {
         // First beat of bar, check if preset change was requested
-        _load_preset(_presets.presets[_requested_preset_index].settings);
+        _load_preset(_presets.presets[_requested_preset_index].settings,
+                     (uint16_t *) &_current_bpm,
+                     (uint16_t *) &_current_beat_count);
         _current_preset_index = _requested_preset_index;
         _preset_change_requested = false;
         _preset_change_complete = true;
@@ -972,7 +1090,9 @@ static bool _handle_preset_edit_inputs(void)
     if (_buttons[BUTTON_ADD_DELETE].pressed || _buttons[BUTTON_MODE].pressed)
     {
         // Save current settings back to preset slot
-        _save_preset(&_presets.presets[_current_preset_index].settings);
+        _save_preset(&_presets.presets[_current_preset_index].settings,
+                     (uint16_t *) &_current_bpm,
+                     (uint16_t *) &_current_beat_count);
         LOG_INFO("finished editing preset %s", _presets.presets[_current_preset_index].name);
 
         // Return to preset playback state
@@ -1137,7 +1257,9 @@ static bool _handle_metronome_inputs(void)
         lcd_update_required = true;
 
         // Load current preset data
-        _load_preset(_presets.presets[_current_preset_index].settings);
+        _load_preset(_presets.presets[_current_preset_index].settings,
+                     (uint16_t *) &_current_bpm,
+                     (uint16_t *) &_current_beat_count);
         _tc4_set_period(_current_bpm);
         _preset_change_complete = true;
     }
@@ -1186,7 +1308,9 @@ static bool _handle_preset_playback_inputs(void)
         {
             // Load new preset immediately
             _current_preset_index = new_index;
-            _load_preset(_presets.presets[_current_preset_index].settings);
+            _load_preset(_presets.presets[_current_preset_index].settings,
+                         (uint16_t *) &_current_bpm,
+                         (uint16_t *) &_current_beat_count);
             _preset_change_complete = true;
         }
 
@@ -1206,7 +1330,9 @@ static bool _handle_preset_playback_inputs(void)
         {
             // Load new preset immediately
             _current_preset_index = new_index;
-            _load_preset(_presets.presets[_current_preset_index].settings);
+            _load_preset(_presets.presets[_current_preset_index].settings,
+                         (uint16_t *) &_current_bpm,
+                         (uint16_t *) &_current_beat_count);
             _preset_change_complete = true;
         }
 
@@ -1251,7 +1377,9 @@ static bool _handle_preset_playback_inputs(void)
         // If metronome not running, we can update metronome settings right now
         if (!_metronome_running)
         {
-            _load_preset(_presets.presets[_requested_preset_index].settings);
+            _load_preset(_presets.presets[_requested_preset_index].settings,
+                         (uint16_t *) &_current_bpm,
+                         (uint16_t *) &_current_beat_count);
             _current_preset_index = _requested_preset_index;
             _preset_change_requested = false;
         }
@@ -1366,7 +1494,7 @@ static bool _handle_name_entry_inputs(void)
             _preset_name_buf[_preset_name_pos] = '\0';
             metronome_preset_t *preset_slot = &_presets.presets[_presets.preset_count];
             memcpy(preset_slot->name, _preset_name_buf, _preset_name_pos + 1u);
-            _save_preset(&preset_slot->settings);
+            _save_preset(&preset_slot->settings, (uint16_t *) &_current_bpm, (uint16_t *) &_current_beat_count);
 
             _presets.preset_count += 1u;
             _preset_name_pos = 0u;
