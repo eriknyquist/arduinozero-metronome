@@ -103,6 +103,7 @@ private:
   int _bitsPerSample;
 
   volatile bool _dmaTransferInProgress;
+  volatile bool _enabled;
   I2SDoubleBuffer _doubleBuffer;
 
   void (*_onTransmit)(void);

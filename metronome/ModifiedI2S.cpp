@@ -148,6 +148,8 @@ int ModifiedI2SClass::begin(int mode, long sampleRate, int bitsPerSample, bool d
 
   _doubleBuffer.reset();
 
+  _enabled = true;
+
   return 1;
 }
 
@@ -173,11 +175,15 @@ void ModifiedI2SClass::end()
   _beginCount--;
 
   if (_beginCount == 0) {
-    i2sd.disable();
+    if (_enabled) {
+        i2sd.disable();
+    }
 
     // disable the I2S interface
     PM->APBCMASK.reg &= ~PM_APBCMASK_I2S;
   }
+
+  _enabled = false;
 }
 
 int ModifiedI2SClass::available()
@@ -407,6 +413,7 @@ void ModifiedI2SClass::enable()
   while (GCLK->STATUS.bit.SYNCBUSY);
 
   i2sd.enable();
+  _enabled = true;
 }
 
 void ModifiedI2SClass::disable()
@@ -415,7 +422,7 @@ void ModifiedI2SClass::disable()
   while (GCLK->STATUS.bit.SYNCBUSY);
 
   i2sd.disable();
-
+  _enabled = false;
 }
 
 int ModifiedI2SClass::remainingBytesToTransmit()

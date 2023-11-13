@@ -401,8 +401,6 @@ static bool _decrement_volume(void)
 // Disable all interrupts, set all pins to inputs, and save presets to flash
 static void _power_off(void)
 {
-    LOG_INFO("powering off");
-
     // Stop metronome timer, & disable TC4 interrupt request
     _stop_metronome();
     TC4->COUNT32.INTENSET.bit.MC0 = 0;
@@ -418,9 +416,6 @@ static void _power_off(void)
         detachInterrupt(digitalPinToInterrupt(_buttons[i].gpio_pin));
     }
 
-    // Disable I2S
-    ModifiedI2S.end();
-
 #if ENABLE_FLASH_WRITE
     uint32_t new_crc = _calc_preset_crc();
     if (_preset_crc_on_boot != new_crc)
@@ -435,9 +430,14 @@ static void _power_off(void)
     }
 #endif // ENABLE_FLASH_WRITE
 
+    // Disable I2S
+    ModifiedI2S.end();
+
+    LOG_INFO("powering off");
+
 #if ENABLE_UART_LOGGING || ENABLE_UART_CLI
     // Disable serial
-    delay(500);
+    delay(100);
     Serial.end();
 #endif // ENABLE_UART_LOGGING || ENABLE_UART_CLI
 
