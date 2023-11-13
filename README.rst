@@ -41,8 +41,8 @@ Features
 * Can be fully remotely/programatically controlled; all button presses can be "emulated"
   by sending serial commands to the Arduino Zero's serial port.
 
-* Supports dumping/loading saved presets via the Arduino Zero's serial port. This
-  makes it easy to migrate all your saved presets to another device.
+* Supports reading & writing saved preset data via the Arduino Zero's serial port.
+  This makes it easy to migrate all your saved presets to another device.
 
 * Arduino Zero internal flash (where all preset data is stored) is *only* written
   to when the device is powered off with a toggle switch, and only if any preset

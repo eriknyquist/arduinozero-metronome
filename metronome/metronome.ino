@@ -1,5 +1,5 @@
 /*
- * Advanced stage metronome for Arduino Zero
+ * Arduino Zero Stage Metronome
  *
  * Erik K. Nyquist 2023
  *
@@ -40,12 +40,12 @@
  *
  * - Metronome beats are triggered by timer interrupts from TC4. Audio samples
  *   for metronome beats are streamed to the I2S DAC directly in the TC4 interrupt
- *   handler, using only the non-blocking versions of the I2S library functions.
- *   Everything else (UART reads/writes, character LCD writes, button state
- *   processing) is done in the main context inside the loop() function. The result
- *   of all this is that the timing of metronome beats is very reliable (or at
- *   least, as reliable as they can be, given the reliablility of the system core
- *   clock), since anything else we happen to be doing can always be interrupted
+ *   handler and DMA interrupt handler, using only the non-blocking versions of the
+ *   I2S library functions. Everything else (UART reads/writes, character LCD writes,
+ *   button state processing) is done in the main context inside the loop() function.
+ *   The result of all this is that the timing of metronome beats is very reliable
+ *   (or at least, as reliable as they can be, given the accuracy of interrupts from
+ *   TC4), since anything else we happen to be doing can always be interrupted
  *   to serve up another chunk of audio samples to the I2S DAC.
  *
  * - UART-based command line interface allows full command/control of the metronome
@@ -323,10 +323,6 @@ static unsigned int _preset_name_pos = 0u;
 // in one go without it blocking on us
 #define SAMPLE_BUF_LEN       (256u)
 
-// Number of buffers of silence (all 0s) to send at the beginning
-// and end of each beep sample we send to the HiLetgo PCM5102 I2S DAC
-#define NUM_I2S_SILENCE_BUFS (1)
-
 // Pointer to the full list of stereo WAV samples for the beep sound currently
 // being streamed to the HiLetgo PCM5102 I2S DAC (high beep or low beep)
 static const int16_t *_beep_samples = high_beep_samples;
@@ -421,6 +417,9 @@ static void _power_off(void)
         pinMode(_buttons[i].gpio_pin, INPUT);
         detachInterrupt(digitalPinToInterrupt(_buttons[i].gpio_pin));
     }
+
+    // Disable I2S
+    ModifiedI2S.end();
 
 #if ENABLE_FLASH_WRITE
     uint32_t new_crc = _calc_preset_crc();
@@ -791,37 +790,37 @@ static void _send_onebuf_silence(void)
 static void _i2s_complete_handler(void)
 {
     static volatile int silence_bufs_sent = 0;
+    static bool final_silence_sent = false;
 
     if (_beep_samples_pos >= BEEP_SAMPLE_COUNT)
     {
+        if (!final_silence_sent)
+        {
+            _send_onebuf_silence();
+            final_silence_sent = true;
+        }
+
         if (0 == ModifiedI2S.remainingBytesToTransmit())
         {
             // done with I2S transfers for this beep sound
             ModifiedI2S.disable();
+            final_silence_sent = false;
         }
 
         return;
     }
 
-    else if (_beep_samples == 0u)
-    {
-        if (silence_bufs_sent < NUM_I2S_SILENCE_BUFS)
-        {
-            _send_onebuf_silence();
-            silence_bufs_sent += 1u;
-            return;
-        }
-        else
-        {
-            // Finished with silence buffers
-            silence_bufs_sent = 0u;
-        }
-    }
-
     uint32_t samples_remaining = BEEP_SAMPLE_COUNT - _beep_samples_pos;
     uint32_t samples_to_send = min(samples_remaining, SAMPLE_BUF_LEN);
-    memcpy(_sample_buf, _beep_samples + _beep_samples_pos, sizeof(_sample_buf));
-    (void) ModifiedI2S.write(_sample_buf, sizeof(_sample_buf));
+
+    // Copy samples to sample buf, modifying for current volume as we go
+    float fvol = ((float) _volume) / 100.0f;
+    for (int i = 0; i < samples_to_send; i++)
+    {
+        _sample_buf[i] = (uint16_t) (((float) _beep_samples[_beep_samples_pos + i]) * fvol);
+    }
+
+    (void) ModifiedI2S.write(_sample_buf, sizeof(uint16_t) * samples_to_send);
     _beep_samples_pos += samples_to_send;
 }
 
@@ -831,7 +830,7 @@ static void _stream_beat_sound(void)
     _beep_samples_pos = 0u;
     _beep_samples = high_beep_samples;
     ModifiedI2S.enable();
-    _i2s_complete_handler();
+    _send_onebuf_silence();
     _i2s_complete_handler();
 }
 
@@ -841,7 +840,7 @@ static void _stream_subbeat_sound(void)
     _beep_samples_pos = 0u;
     _beep_samples = low_beep_samples;
     ModifiedI2S.enable();
-    _i2s_complete_handler();
+    _send_onebuf_silence();
     _i2s_complete_handler();
 }
 
@@ -1108,7 +1107,7 @@ static bool _handle_preset_edit_inputs(void)
         lcd_update_required = _handle_metronome_settings_buttons();
     }
 
-    return lcd_update_required;
+    return lcd_update_required || _handle_volume_inputs();
 }
 
 // Handle button inputs on the edit/delete preset menu screen
@@ -1385,7 +1384,7 @@ static bool _handle_preset_playback_inputs(void)
         }
     }
 
-    return lcd_update_required;
+    return lcd_update_required || _handle_volume_inputs();
 }
 
 // Increment alphanum table row index to next non-space character,
