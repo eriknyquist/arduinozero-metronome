@@ -65,6 +65,46 @@ This diagram shows how all the components should be wired up to the Arduino Zero
 
 .. image:: images/wiring_diagram.drawio.png
 
+Backing up / transferring saved presets
+=======================================
+
+This section describes how to transfer your saved presets to another Arduino Zero metronome.
+You will need to have Python 3x installed, and you will also need to install the ``pyserial``
+python library (e.g. ``pip install pyserial``). You also need to connect the Arduino Zero's
+programming port to your computer via USB cable (same USB port that you use to program
+sketches onto the Arduino Zero).
+
+Downloading saved presets from an Arduino Zero metronome
+########################################################
+
+Use the ``scripts/preset_backup.py`` script with the ``save`` command to download saved
+presets from a connected Arduino Zero metronome. The following command downloads saved
+presets from an Arduino Zero metronome connected to COM14, and saves the downloaded
+preset data in a file called ``saved_presets.txt``:
+
+.. code::
+
+    $ python scripts/preset_backup.py save COM14 saved_presets.txt
+
+    Found 'Arduino Zero Stage Metronome 0.0.1' on COM14
+    Downloading 12 presets
+    12 preset(s) saved in 'saved_presets.txt'
+
+Loading downloaded presets onto an Arduino Zero metronome
+#########################################################
+
+Use the ``scripts/preset_backup.py`` script with the ``load`` command to send downloaded
+presets to a connected Arduino Zero metronome. The following command reads downloaded
+presets from a file called ``saved_presets.txt`` and sends them to to an Arduino Zero
+metronome connected to COM14:
+
+.. code::
+
+    $ python scripts/preset_backup.py load COM14 saved_presets.txt
+
+    Found 'Arduino Zero Stage Metronome 0.0.1' on COM14
+    Succesfully loaded 12 new presets to metronome
+
 Usage
 =====
 

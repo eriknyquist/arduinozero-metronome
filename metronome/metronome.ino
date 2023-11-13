@@ -203,6 +203,7 @@ typedef struct
 
 // Forward declaration of CLI command handlers
 static void _presets_cmd_handler(char *cmd_args);
+static void _version_cmd_handler(char *cmd_args);
 static void _addpreset_cmd_handler(char *cmd_args);
 static void _poweroff_cmd_handler(char *cmd_args);
 static void _help_cmd_handler(char *cmd_args);
@@ -218,12 +219,13 @@ static void _voldown_cmd_handler(char *cmd_args);
 
 
 // Number of CLI commands we can handle (must be manually synced with _cli_commands)
-#define CLI_COMMAND_COUNT (13u)
+#define CLI_COMMAND_COUNT (14u)
 
 // Table mapping CLI command words to command handlers
 static cli_command_t _cli_commands[CLI_COMMAND_COUNT] =
 {
     {"help", _help_cmd_handler},
+    {"version", _version_cmd_handler},
     {"presets", _presets_cmd_handler},
     {"addpreset", _addpreset_cmd_handler},
     {"off", _poweroff_cmd_handler},
@@ -484,12 +486,21 @@ void _help_cmd_handler(char *cmd_args)
     Serial.println("----------------------------------------");
 }
 
+// 'show software version' CLI command handler
+static void _version_cmd_handler(char *cmd_args)
+{
+    Serial.print("Arduino Zero Stage Metronome ");
+    Serial.println(METRONOME_SKETCH_VERSION);
+}
+
 // 'dump presets' CLI command handler
 static void _presets_cmd_handler(char *cmd_args)
 {
+    Serial.print(_presets.preset_count);
+    Serial.println(" preset(s) saved");
+
     if (0u == _presets.preset_count)
     {
-        Serial.println("No presets saved");
         return;
     }
 
