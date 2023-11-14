@@ -30,6 +30,57 @@ def _read_line(ser):
 
     return buf
 
+def _unpack_preset(line):
+    fields = line.split(':')
+    if len(fields) != 2:
+        print(f"Unrecognized preset data: {line}\n")
+        return None
+
+    data_fields = fields[1].strip().split()
+    if len(data_fields) < 2:
+        print(f"Unrecognized preset data: {line}\n")
+        return None
+
+    preset_name = ' '.join(data_fields[1:])
+
+    try:
+        preset_data = int(data_fields[0], 16)
+    except ValueError:
+        print(f"Unrecognized preset data: {line}\n")
+        return None
+
+    bpm = (preset_data & 0x1ff) + 1
+    beat_count = (((preset_data) >> 9) & 0xf) + 1
+
+    return f"{bpm},{beat_count},{preset_name}"
+
+def _pack_preset(line):
+    fields = line.split(',')
+    if len(fields) != 3:
+        print(f"Unrecognized preset data: {line}\n")
+        return None
+
+    try:
+        bpm = int(fields[0])
+    except ValueError:
+        print(f"Unrecognized preset data: {line}\n")
+        return None
+
+    try:
+        beat_count = int(fields[1])
+    except ValueError:
+        print(f"Unrecognized preset data: {line}\n")
+        return None
+
+    if 0 in [bpm, beat_count]:
+        print(f"Unrecognized preset data: {line}\n")
+        return None
+
+    preset_name = fields[2].strip()
+    preset_data = ((bpm - 1) & 0x1ff) | (((beat_count - 1) & 0xf) << 9)
+
+    return f"0x{preset_data:X} {preset_name}"
+
 def _metronome_version_check(ser):
     """
     Sends the 'version' command to the serial port, and returns the reported version
@@ -51,17 +102,22 @@ def _load_preset_data(ser, filename):
         lines = fh.readlines()
 
     if len(lines) == 0:
-        print(f"No presets to load in {filename}")
+        print(f"No presets to load in {filename}\n")
         return -1
 
     for line in lines:
-        ser.write(f"addpreset {line.strip()}\n".encode('utf-8'))
+        preset_line = _pack_preset(line)
+        if line is None:
+            return -1
+
+        ser.write(f"addpreset {preset_line}\n".encode('utf-8'))
         resp_line = _read_line(ser)
         if not resp_line.startswith('Added preset '):
-            print(f"Unrecognized response from metronome: {resp_line}")
+            print(f"Unrecognized response from metronome: {resp_line}\n")
             return -1
 
     print(f"Succesfully loaded {len(lines)} new presets to metronome")
+    print("\nRemember to power off the metronome via toggle switch or via CLI 'off' command!\n")
     return 0
 
 def _save_preset_data(ser, filename):
@@ -76,23 +132,23 @@ def _save_preset_data(ser, filename):
     try:
         preset_count = int(preset_count_str)
     except ValueError:
-        print(f"Invalid preset count line: {count_line}")
+        print(f"Invalid preset count line: {count_line}\n")
         return -1
 
     if preset_count == 0:
-        print("No presets to download")
+        print("No presets to download\n")
         return 0
 
     print(f"Downloading {preset_count} presets")
 
     lines = []
     for i in range(preset_count):
-        lines.append(_read_line(ser))
+        lines.append(_unpack_preset(_read_line(ser)))
 
     with open(filename, 'w') as fh:
         fh.write('\n'.join(lines))
 
-    print(f"{preset_count} preset(s) saved in '{filename}'")
+    print(f"{preset_count} preset(s) saved in '{filename}'\n")
 
     return 0
 
@@ -113,7 +169,7 @@ def main():
         print(f"Could not find a metronome at '{args.serialport}'")
         return -1
 
-    print(f"Found '{version}' on {args.serialport}")
+    print(f"\nFound '{version}' on {args.serialport}")
 
     ret = -1
     if args.optype == 'save':

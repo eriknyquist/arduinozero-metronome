@@ -105,6 +105,12 @@ metronome connected to COM14:
     Found 'Arduino Zero Stage Metronome 0.0.1' on COM14
     Succesfully loaded 12 new presets to metronome
 
+    Power off the metronome via toggle switch or via CLI 'off' command
+
+NOTE: After loading presets, whenever you want to power off the metronome, it is important
+to power off the metronome via the toggle switch, OR via the CLI 'off' command. If power is
+removed unexpectedly, then the presets you just loaded will not be saved.
+
 Usage
 =====
 
