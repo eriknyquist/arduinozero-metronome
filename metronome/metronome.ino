@@ -443,7 +443,7 @@ static void _power_off(void)
 #endif // ENABLE_UART_LOGGING || ENABLE_UART_CLI
 
     // Go into low power mode forever
-    LowPower.sleep();
+    LowPower.deepSleep();
 }
 
 // GPIO callback wrapper, initiates debounce for button pin if not already in progress
