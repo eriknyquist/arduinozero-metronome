@@ -58,6 +58,7 @@
 
 #include <stdarg.h>
 
+#include <LiquidCrystal.h>
 #include <Arduino_CRC32.h>
 #include <FlashStorage.h>
 #include <ArduinoLowPower.h>
@@ -271,8 +272,8 @@ static volatile button_info_t _buttons[BUTTON_COUNT] =
     {false, LOW, DEBOUNCE_IDLE, 0u, _select_button_callback,  SELECT_BUTTON_PIN},     // BUTTON_SELECT
     {false, LOW, DEBOUNCE_IDLE, 0u, _mode_button_callback, MODE_BUTTON_PIN},          // BUTTON_MODE
     {false, LOW, DEBOUNCE_IDLE, 0u, _add_delete_button_callback, ADD_DEL_BUTTON_PIN}, // BUTTON_ADD_DELETE
-    {false, LOW, DEBOUNCE_IDLE, 0u, _volup_button_callback, MODE_BUTTON_PIN},         // BUTTON_VOLUP
-    {false, LOW, DEBOUNCE_IDLE, 0u, _voldown_button_callback, ADD_DEL_BUTTON_PIN}     // BUTTON_VOLDOWN
+    {false, LOW, DEBOUNCE_IDLE, 0u, _volup_button_callback, VOLUP_BUTTON_PIN},        // BUTTON_VOLUP
+    {false, LOW, DEBOUNCE_IDLE, 0u, _voldown_button_callback, VOLDOWN_BUTTON_PIN}     // BUTTON_VOLDOWN
 };
 
 // Runtime values for BPM, beat count, metronome mode, and preset index
@@ -372,6 +373,10 @@ Arduino_CRC32 crc_generator;
 
 // Flash storage object for preset saving
 FlashStorage(preset_store, metronome_presets_t);
+
+// LCD object for controlling the screen
+LiquidCrystal lcd(LCD_RS_PIN, LCD_EN_PIN, LCD_D4_PIN, LCD_D5_PIN, LCD_D6_PIN, LCD_D7_PIN);
+
 
 // Increment volume by 10%
 static bool _increment_volume(void)
@@ -1680,6 +1685,9 @@ void setup()
 
     // Set timer period based on starting BPM
     _tc4_set_period(_current_bpm);
+
+    // Enable LCD screen
+    lcd.begin(20,4);
 
 #if ENABLE_UART_LOGGING || ENABLE_UART_CLI
     Serial.begin(115200);
