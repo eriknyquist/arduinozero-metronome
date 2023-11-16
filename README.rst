@@ -49,7 +49,39 @@ Features
   data has changed, in order to maximize the life of the device since the Arduino
   Zero internal flash has a limited number of write cycles.
 
-Hardware Required
+Limitations
+===========
+
+* The project described here does not include a battery. Everything is powered via the
+  Arduino Zero, and you can then power the Arduino Zero however you like (via USB cable
+  or DC jack).
+
+* I'm not a UI/UX designer, so the button choices & general flow through the various
+  screens on the metronome are probably not ideal.
+
+* Powering off the device with the on/off toggle switch, which is required to save
+  any changed preset data, does not actually power off the Arduino Zero. Instead,
+  it will disable all peripheral devices (LCD screen, I2S DAC, GPIO pins) and enter
+  a low-power state via the Arduino `Low Power library <https://www.arduino.cc/reference/en/libraries/arduino-low-power>`_.
+
+  This means the Arduino Zero will still draw some power (although, less), which
+  might be noticeable if you are running this project from a battery.
+
+Arduino Libraries required
+==========================
+
+Arduino Zero Stage Metronome requires the following Arduino libraries to be installed,
+all of which can be obtained through the Arduino IDE's `Library Manager <https://docs.arduino.cc/software/ide-v1/tutorials/installing-libraries>`_:
+
+* **Arduino_CRC32** (version 1.0.0)
+* **FlashStorage** (version 1.0.0)
+* **Arduino Low Power** (version 1.2.2)
+* **LiquidCrystal** (version 1.0.7)
+
+(The exact versions are not necessarily required, they were just the latest available versions
+at the time when I installed them)
+
+Hardware required
 =================
 
 * `Arduino Zero <https://store.arduino.cc/products/arduino-zero>`_ (Must be an Arduino Zero. Uno or other boards will not work.)
