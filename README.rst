@@ -113,6 +113,7 @@ to work well for this project:
 Here is an image of the solder bridges on my module, for reference:
 
 .. image:: images/hiletgo_bridges.jpg
+   :scale: 50%
 
 Usage
 =====
@@ -185,6 +186,33 @@ can be reached by pressing the **Add/Delete** button when on the metronome scree
 NOTE: you can also select the asterisk **\*** with the cursor to save the preset without
 prompting and return to the metronome screen.
 
+Using the serial CLI interface
+==============================
+
+With the Arduino Zero connected via USB cable (the programming port, same USB
+port used for flashing), open the Arduino IDE Serial Monitor at 115200 baud. Type
+``help`` to see a list of available commands:
+
+.. code::
+
+	19:39:57.419 -> -------- CLI command reference ---------
+	19:39:57.419 -> Version 0.0.1
+	19:39:57.419 -> help      - Show this printout.
+	19:39:57.419 -> presets   - Show all saved presets.
+	19:39:57.419 -> addpreset - Create new preset. One line of output
+	19:39:57.419 ->             from the 'presets' command should be passed
+	19:39:57.450 ->             as parameter(s).
+	19:39:57.450 -> off       - Save presets to flash, power off device.
+	19:39:57.450 -> u         - Emulate UP button press.
+	19:39:57.450 -> d         - Emulate DOWN button press.
+	19:39:57.450 -> l         - Emulate LEFT button press.
+	19:39:57.450 -> r         - Emulate RIGHT button press.
+	19:39:57.450 -> s         - Emulate SELECT button press.
+	19:39:57.450 -> m         - Emulate MODE button press.
+	19:39:57.450 -> a         - Emulate ADD/DEL button press.
+	19:39:57.495 -> +         - Emulate 'volume up' button press
+	19:39:57.495 -> -         - Emulate 'volume down' button press
+	19:39:57.496 -> ----------------------------------------
 
 Backing up / creating presets via the ``scripts/preset_manager.py`` CLI tool
 ============================================================================
