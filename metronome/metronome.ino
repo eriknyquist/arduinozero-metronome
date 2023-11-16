@@ -462,7 +462,7 @@ static void _gpio_callback(button_e button)
 
 #if ENABLE_UART_CLI
 // 'help' CLI command handler
-void _help_cmd_handler(char *cmd_args)
+static void _help_cmd_handler(char *cmd_args)
 {
     Serial.println("-------- CLI command reference ---------");
     Serial.print("Version ");
@@ -791,12 +791,14 @@ static void _update_char_lcd(void)
     }
 }
 
+// Sends SAMPLE_BUF_LEN samples of 0 to the I2S DAC
 static void _send_onebuf_silence(void)
 {
     static uint16_t silence[SAMPLE_BUF_LEN] = {0u};
     ModifiedI2S.write(silence, sizeof(silence));
 }
 
+// I2S transfer complete function, provides the next chunk of audio samples for I2S DAC
 static void _i2s_complete_handler(void)
 {
     static volatile int silence_bufs_sent = 0;
@@ -804,8 +806,10 @@ static void _i2s_complete_handler(void)
 
     if (_beep_samples_pos >= BEEP_SAMPLE_COUNT)
     {
+        // All samples for this beep sound have been sent
         if (!final_silence_sent)
         {
+            // Send one buffer of silence at the end
             _send_onebuf_silence();
             final_silence_sent = true;
         }
@@ -840,7 +844,9 @@ static void _stream_beat_sound(void)
     _beep_samples_pos = 0u;
     _beep_samples = high_beep_samples;
     ModifiedI2S.enable();
-    _send_onebuf_silence();
+
+    // Fill the double-buffer with SAMPLE_BUF_LEN * 2 samples
+    _send_onebuf_silence(); // Start with one buffer of silence
     _i2s_complete_handler();
 }
 
@@ -850,15 +856,15 @@ static void _stream_subbeat_sound(void)
     _beep_samples_pos = 0u;
     _beep_samples = low_beep_samples;
     ModifiedI2S.enable();
-    _send_onebuf_silence();
+
+    // Fill the double-buffer with SAMPLE_BUF_LEN * 2 samples
+    _send_onebuf_silence(); // Start with one buffer of silence
     _i2s_complete_handler();
 }
 
 // Called on TC4 interrupt, starts streaming the next beat to the I2S DAC
-void _start_streaming_next_beat(void)
+static void _start_streaming_next_beat(void)
 {
-    unsigned long now = millis();
-
     if ((MIN_BEAT == _current_beat) && _preset_change_requested)
     {
         // First beat of bar, check if preset change was requested
@@ -892,13 +898,13 @@ void _start_streaming_next_beat(void)
 }
 
 // Wait for TC4 to be not busy
-bool _tc4_syncing(void)
+static bool _tc4_syncing(void)
 {
     return TC4->COUNT32.STATUS.reg & TC_STATUS_SYNCBUSY;
 }
 
 // Reset (stop) TC4 timer
-void _tc4_reset(void)
+static void _tc4_reset(void)
 {
     TC4->COUNT32.CTRLA.reg = TC_CTRLA_SWRST;
     while (_tc4_syncing());
@@ -941,7 +947,7 @@ static void _stop_metronome(void)
 }
 
 // Change TC4 counter period, stops timer first if needed
-void _tc4_set_period(unsigned int bpm)
+static void _tc4_set_period(unsigned int bpm)
 {
     // Stop timer/counter, if runnning
     bool timer_was_running = false;
@@ -971,7 +977,7 @@ static void _max_preset_count_exceeded(void)
 }
 
 // Helper function to change state and log the transition
-void _state_transition(metronome_state_e new_state)
+static void _state_transition(metronome_state_e new_state)
 {
     const char *statename = "";
     switch(new_state)
@@ -1117,7 +1123,8 @@ static bool _handle_preset_edit_inputs(void)
         lcd_update_required = _handle_metronome_settings_buttons();
     }
 
-    return lcd_update_required || _handle_volume_inputs();
+    bool volume_changed = _handle_volume_inputs();
+    return lcd_update_required || volume_changed;
 }
 
 // Handle button inputs on the edit/delete preset menu screen
@@ -1232,6 +1239,7 @@ static bool _handle_preset_delete_inputs(void)
     return lcd_update_required;
 }
 
+// Handle button inputs for changing the volume
 static bool _handle_volume_inputs(void)
 {
     bool lcd_update_required = false;
@@ -1296,7 +1304,8 @@ static bool _handle_metronome_inputs(void)
         lcd_update_required = _handle_metronome_settings_buttons();
     }
 
-    return lcd_update_required || _handle_volume_inputs();
+    bool volume_changed = _handle_volume_inputs();
+    return lcd_update_required || volume_changed;
 }
 
 // Handle button inputs in "preset playback" mode
@@ -1394,7 +1403,8 @@ static bool _handle_preset_playback_inputs(void)
         }
     }
 
-    return lcd_update_required || _handle_volume_inputs();
+    bool volume_changed = _handle_volume_inputs();
+    return lcd_update_required || volume_changed;
 }
 
 // Increment alphanum table row index to next non-space character,
