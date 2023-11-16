@@ -65,6 +65,23 @@ This diagram shows how all the components should be wired up to the Arduino Zero
 
 .. image:: images/wiring_diagram.drawio.png
 
+Required solder bridges on HiLetgo PCM5102 I2S DAC module
+=========================================================
+
+The underside of the PCB for the HiLetgo I2S DAC module has 4 sets of solder pads,
+numbered 1 through 4, which must be bridged. They may already be bridged on the module
+you bought, but if they are not, then you can use the following settings, which I found
+to work well for this project:
+
+* Bridge #1 (``H1L`` on the silkscreen): **LOW**
+* Bridge #2 (``H2L`` on the silkscreen): **LOW**
+* Bridge #3 (``H3L`` on the silkscreen): **HIGH**
+* Bridge #4 (``H4L`` on the silkscreen): **LOW**
+
+Here is an image of the solder bridges on my module, for reference:
+
+.. image:: images/hiletgo_bridges.jpg
+
 Usage
 =====
 
@@ -77,13 +94,13 @@ This is the screen that will be showing on power-on.
 
 .. image:: images/metronome_screen.drawio.png
 
-* **Up button**: Increases BPM
-* **Down button**: Decreases BPM
-* **Left button**: Decreases number of beats per bar
-* **Right button**: Increases number of beats per bar
-* **Middle button**: Start/stop metronome
+* **D-pad up button**: Increases BPM
+* **D-pad down button**: Decreases BPM
+* **D-pad left button**: Decreases number of beats per bar
+* **D-pad right button**: Increases number of beats per bar
+* **D-pad middle button**: Start/stop metronome
 * **Mode button**: Switch to preset playback screen
-* **Add/Delete button**: Save preset (switches to name entry screen)
+* **Add/Delete button**: Create new preset from current metronome settings (switches to name entry screen)
 
 Preset playback screen
 ######################
@@ -93,11 +110,11 @@ be reached by pressing the **Mode** button when on the metronome screen.
 
 .. image:: images/preset_playback_screen.drawio.png
 
-* **Up button**: Switch to next preset
-* **Down button**: Switch to previous preset
-* **Left button**: Nothing
-* **Right button**: Nothing
-* **Middle button**: Start/stop metronome
+* **D-pad up button**: Switch to next preset
+* **D-pad down button**: Switch to previous preset
+* **D-pad left button**: Nothing
+* **D-pad right button**: Nothing
+* **D-pad middle button**: Start/stop metronome
 * **Mode button**: Switch to metronome screen
 * **Add/Delete button**: Edit or delete preset (shows two options to select, "Edit" or "Delete")
 
@@ -109,13 +126,13 @@ pressing the **Add/Delete** button when on the preset playback screen, and then 
 
 .. image:: images/preset_edit_screen.drawio.png
 
-* **Up button**: Increases BPM
-* **Down button**: Decreases BPM
-* **Left button**: Decreases number of beats per bar
-* **Right button**: Increases number of beats per bar
-* **Middle button**: Start/stop metronome
-* **Mode button**: Switch to metronome screen (changes will not be saved)
-* **Add/Delete button**: Save changes to preset (switches to preset playback screen)
+* **D-pad up button**: Increases BPM
+* **D-pad down button**: Decreases BPM
+* **D-pad left button**: Decreases number of beats per bar
+* **D-pad right button**: Increases number of beats per bar
+* **D-pad middle button**: Start/stop metronome
+* **Mode button**: Prompt yes/no to save preset changes, then switch to preset playback screen
+* **Add/Delete button**: Prompt yes/no to save preset changes, then switch to preset playback screen
 
 Name entry screen
 #################
@@ -125,32 +142,17 @@ can be reached by pressing the **Add/Delete** button when on the metronome scree
 
 .. image:: images/name_entry_screen.drawio.png
 
-* **Up button**: Move cursor up
-* **Down button**: Move cursor down
-* **Left button**: Move cursor left
-* **Right button**: Move cursor right
-* **Middle button**: Select letter under cursor
-* **Mode button**: Switch to metronome screen without saving preset
-* **Add/Delete button**: Save changes to preset and switch back to metronome screen
-                         (you can also select the asterisk **\*** with the cursor
-                         to save and return to the metronome screen)
+* **D-pad up button**: Move cursor up
+* **D-pad down button**: Move cursor down
+* **D-pad left button**: Move cursor left
+* **D-pad right button**: Move cursor right
+* **D-pad middle button**: Select letter under cursor
+* **Mode button**: Prompt yes/no to save the preset, then switch to metronome screen
+* **Add/Delete button**: Prompt yes/no to save the preset, then switch back to metronome screen
 
-Required solder bridges on HiLetgo PCM5102 I2S DAC module
-=========================================================
+NOTE: you can also select the asterisk **\*** with the cursor to save the preset without
+prompting and return to the metronome screen.
 
-The underside of the PCB for the HiLetgo I2S DAC module has 4 sets of solder pads,
-numbered 1 through 4, which must be bridged. They may already be bridged on the module
-you bought, but if they are not, then I found that the following settings worked well
-for this project:
-
-* Bridge #1 (``H1L`` on the silkscreen): **LOW**
-* Bridge #2 (``H2L`` on the silkscreen): **LOW**
-* Bridge #3 (``H3L`` on the silkscreen): **HIGH**
-* Bridge #4 (``H4L`` on the silkscreen): **LOW**
-
-Here is an image of solder bridges on my module, for reference:
-
-.. image:: images/hiletgo_bridges.jpg
 
 Backing up / creating presets via the ``scripts/preset_manager.py`` CLI tool
 ============================================================================
