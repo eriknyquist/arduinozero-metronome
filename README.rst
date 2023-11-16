@@ -135,6 +135,23 @@ can be reached by pressing the **Add/Delete** button when on the metronome scree
                          (you can also select the asterisk **\*** with the cursor
                          to save and return to the metronome screen)
 
+Required solder bridges on HiLetgo PCM5102 I2S DAC module
+=========================================================
+
+The underside of the PCB for the HiLetgo I2S DAC module has 4 sets of solder pads,
+numbered 1 through 4, which must be bridged. They may already be bridged on the module
+you bought, but if they are not, then I found that the following settings worked well
+for this project:
+
+* Bridge #1 (``H1L`` on the silkscreen): **LOW**
+* Bridge #2 (``H2L`` on the silkscreen): **LOW**
+* Bridge #3 (``H3L`` on the silkscreen): **HIGH**
+* Bridge #4 (``H4L`` on the silkscreen): **LOW**
+
+Here is an image of solder bridges on my module, for reference:
+
+.. image:: images/hiletgo_bridges.jpg
+
 Backing up / creating presets via the ``scripts/preset_manager.py`` CLI tool
 ============================================================================
 
