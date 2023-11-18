@@ -68,52 +68,62 @@
 #define METRONOME_SKETCH_VERSION "0.0.1"
 
 // If 0, no log messages will be sent to the UART
-#define ENABLE_UART_LOGGING     (1u)
+#define ENABLE_UART_LOGGING      (1u)
 
 // If 0, CLI interface will not be available
-#define ENABLE_UART_CLI         (1u)
+#define ENABLE_UART_CLI          (1u)
 
 // Only used for debugging, useful if testing something unrelated to
 // preset storage and want to avoid wasting flash write cycles
-#define ENABLE_FLASH_WRITE      (1u)
+#define ENABLE_FLASH_WRITE       (1u)
+
+// Time between value increments when holding a button down, in milliseconds
+#define BUTTON_HOLD_CHANGE_MS    (300u)
+
+// When holding down a button, the value increment will be doubled after this many #BUTTON_HOLD_CHANGE_MS periods
+#define BUTTON_HOLD_DOUBLE_COUNT (8u)
+
+// When holding down a button, the value increment will be doubled no more than this many times
+#define BUTTON_HOLD_MAX_DOUBLES  (4u)
+
 
 // I2S sample rate and sample width
-#define SAMPLE_RATE (44100)
-#define SAMPLE_WIDTH (16)
+#define SAMPLE_RATE              (44100)
+#define SAMPLE_WIDTH             (16)
 
 // GPIO pin numbers for 20x4 character LCD (0, 1 and 9 are needed by I2S library).
 // 13 is the builtin LED, which is used to show when we are streaming samples to
 // the I2S DAC)
-#define LCD_RS_PIN              (2)
-#define LCD_EN_PIN              (3)
-#define LCD_D4_PIN              (4)
-#define LCD_D5_PIN              (5)
-#define LCD_D6_PIN              (6)
-#define LCD_D7_PIN              (7)
+#define LCD_RS_PIN               (2)
+#define LCD_EN_PIN               (3)
+#define LCD_D4_PIN               (4)
+#define LCD_D5_PIN               (5)
+#define LCD_D6_PIN               (6)
+#define LCD_D7_PIN               (7)
 
 // GPIO pin numbers for buttons
-#define UP_BUTTON_PIN           (A0)
-#define DOWN_BUTTON_PIN         (A1)
-#define LEFT_BUTTON_PIN         (A2)
-#define RIGHT_BUTTON_PIN        (A3)
-#define SELECT_BUTTON_PIN       (A4)
-#define MODE_BUTTON_PIN         (A5)
-#define ADD_DEL_BUTTON_PIN      (A5)
-#define VOLUP_BUTTON_PIN        (10)
-#define VOLDOWN_BUTTON_PIN      (11)
+#define UP_BUTTON_PIN            (20)
+#define DOWN_BUTTON_PIN          (A1)
+#define LEFT_BUTTON_PIN          (A2)
+#define RIGHT_BUTTON_PIN         (A3)
+#define SELECT_BUTTON_PIN        (A4)
+#define MODE_BUTTON_PIN          (21)
+#define VOLUP_BUTTON_PIN         (10)
+#define VOLDOWN_BUTTON_PIN       (11)
+#define ADD_DEL_BUTTON_PIN       (12)
 
 
-#define MAX_PRESET_NAME_LEN     (32u)   // Max. number of characters for a preset name string
-#define MAX_PRESET_COUNT        (128u)  // Max. number of presets that can be saved in flash
-#define BUTTON_DEBOUNCE_MS      (100u)  // Button debounce time, milliseconds
-#define MIN_BPM                 (1u)    // Min. allowed BPM value
-#define MAX_BPM                 (512u)  // Max. allowed BPM value
-#define MIN_BEAT                (1u)    // Min. allowed beat value
-#define MAX_BEAT                (16u)   // Max. allowed beat value
+#define MAX_PRESET_NAME_LEN      (32u)   // Max. number of characters for a preset name string
+#define MAX_PRESET_COUNT         (128u)  // Max. number of presets that can be saved in flash
+#define BUTTON_DEBOUNCE_MS       (100u)  // Button debounce time, milliseconds
+#define MIN_BPM                  (1u)    // Min. allowed BPM value
+#define MAX_BPM                  (512u)  // Max. allowed BPM value
+#define MIN_BEAT                 (1u)    // Min. allowed beat value
+#define MAX_BEAT                 (16u)   // Max. allowed beat value
 
 // Actual system core clock freq for Arduino Zero
 // (taken from https://github.com/manitou48/crystals/blob/master/crystals.txt)
-#define TRUE_CORE_CLOCK_HZ      (47972352UL)
+#define TRUE_CORE_CLOCK_HZ       (47972352UL)
 
 
 // Checks if character is space or tab
@@ -185,12 +195,14 @@ typedef enum
 // Holds all data required to track the state of a single button
 typedef struct
 {
-    bool pressed;            // True if debounce determined button was pressed
-    int pressed_state;      // GPIO value that represents a pressed button
-    debounce_state_e state;  // Current debounce state
-    unsigned long start_ms;  // Debounce start time, milliseconds
-    void (*callback)(void);  // Interrupt handler
-    int gpio_pin;            // GPIO pin number for button
+    bool pressed;                    // True if button is currently pressed
+    bool unhandled_press;            // True if the button is pressed and we have not handled it yet
+    int pressed_state;               // GPIO value that represents a pressed button
+    debounce_state_e state;          // Current debounce state
+    unsigned int hold_repeat_count;  // Time button has been held, in increments of #BUTTON_HOLD_CHANGE_MS
+    unsigned long start_ms;          // Debounce start time, milliseconds
+    void (*callback)(void);          // Interrupt handler
+    int gpio_pin;                    // GPIO pin number for button
 } button_info_t;
 
 #if ENABLE_UART_CLI
@@ -265,15 +277,15 @@ void _voldown_button_callback(void) { _gpio_callback(BUTTON_VOLDOWN); }
 // State tracking/debouncing for all buttons
 static volatile button_info_t _buttons[BUTTON_COUNT] =
 {
-    {false, LOW, DEBOUNCE_IDLE, 0u, _up_button_callback, UP_BUTTON_PIN},              // BUTTON_UP
-    {false, LOW, DEBOUNCE_IDLE, 0u, _down_button_callback, DOWN_BUTTON_PIN},          // BUTTON_DOWN
-    {false, LOW, DEBOUNCE_IDLE, 0u, _left_button_callback, LEFT_BUTTON_PIN},          // BUTTON_LEFT
-    {false, LOW, DEBOUNCE_IDLE, 0u, _right_button_callback, RIGHT_BUTTON_PIN},        // BUTTON_RIGHT
-    {false, LOW, DEBOUNCE_IDLE, 0u, _select_button_callback,  SELECT_BUTTON_PIN},     // BUTTON_SELECT
-    {false, LOW, DEBOUNCE_IDLE, 0u, _mode_button_callback, MODE_BUTTON_PIN},          // BUTTON_MODE
-    {false, LOW, DEBOUNCE_IDLE, 0u, _add_delete_button_callback, ADD_DEL_BUTTON_PIN}, // BUTTON_ADD_DELETE
-    {false, LOW, DEBOUNCE_IDLE, 0u, _volup_button_callback, VOLUP_BUTTON_PIN},        // BUTTON_VOLUP
-    {false, LOW, DEBOUNCE_IDLE, 0u, _voldown_button_callback, VOLDOWN_BUTTON_PIN}     // BUTTON_VOLDOWN
+    {false, false, LOW, DEBOUNCE_IDLE, 0u, 0u, _up_button_callback, UP_BUTTON_PIN},              // BUTTON_UP
+    {false, false, LOW, DEBOUNCE_IDLE, 0u, 0u, _down_button_callback, DOWN_BUTTON_PIN},          // BUTTON_DOWN
+    {false, false, LOW, DEBOUNCE_IDLE, 0u, 0u, _left_button_callback, LEFT_BUTTON_PIN},          // BUTTON_LEFT
+    {false, false, LOW, DEBOUNCE_IDLE, 0u, 0u, _right_button_callback, RIGHT_BUTTON_PIN},        // BUTTON_RIGHT
+    {false, false, LOW, DEBOUNCE_IDLE, 0u, 0u, _select_button_callback,  SELECT_BUTTON_PIN},     // BUTTON_SELECT
+    {false, false, LOW, DEBOUNCE_IDLE, 0u, 0u, _mode_button_callback, MODE_BUTTON_PIN},          // BUTTON_MODE
+    {false, false, LOW, DEBOUNCE_IDLE, 0u, 0u, _add_delete_button_callback, ADD_DEL_BUTTON_PIN}, // BUTTON_ADD_DELETE
+    {false, false, LOW, DEBOUNCE_IDLE, 0u, 0u, _volup_button_callback, VOLUP_BUTTON_PIN},        // BUTTON_VOLUP
+    {false, false, LOW, DEBOUNCE_IDLE, 0u, 0u, _voldown_button_callback, VOLDOWN_BUTTON_PIN}     // BUTTON_VOLDOWN
 };
 
 // Runtime values for BPM, beat count, metronome mode, and preset index
@@ -636,7 +648,6 @@ static void _poweroff_cmd_handler(char *cmd_args)
 // Generic simulated button press CLI command handler
 static void _button_cli_handler(button_e button)
 {
-    _buttons[button].pressed = true;
     _buttons[button].state = DEBOUNCE_FORCE;
 }
 
@@ -1014,7 +1025,7 @@ static void _state_transition(metronome_state_e new_state)
     // Reset all button states
     for (unsigned int i = 0u; i < BUTTON_COUNT; i++)
     {
-        _buttons[i].pressed = false;
+        _buttons[i].unhandled_press = false;
         _buttons[i].state = DEBOUNCE_IDLE;
     }
 
@@ -1022,12 +1033,42 @@ static void _state_transition(metronome_state_e new_state)
     _current_state = new_state;
 }
 
+// Handle timing & value increment calculations for a button that is being held down
+static bool _handle_held_button(button_e button, int *update_value)
+{
+    bool ret = false;
+    unsigned long now = millis();
+    unsigned long elapsed = now - _buttons[button].start_ms;
+
+    if (BUTTON_HOLD_CHANGE_MS <= elapsed)
+    {
+        unsigned int double_count = _buttons[button].hold_repeat_count / BUTTON_HOLD_DOUBLE_COUNT;
+        ret = true;
+
+        if (double_count < BUTTON_HOLD_MAX_DOUBLES)
+        {
+            if ((_buttons[button].hold_repeat_count % BUTTON_HOLD_DOUBLE_COUNT) == 0)
+            {
+                *update_value *= 2;
+            }
+        }
+
+        _buttons[button].start_ms = now;
+        _buttons[button].hold_repeat_count += 1u;
+    }
+
+    return ret;
+}
+
 // Handle all buttons related to changing metronome BPM and beat count, and
 // starting/stopping metronome. Used in the STATE_METRONOME and STATE_PRESET_EDIT states.
 static bool _handle_metronome_settings_buttons(void)
 {
-   bool lcd_update_required = false;
-    if (_buttons[BUTTON_UP].pressed)
+    static int bpm_update_value = 0;
+
+    bool lcd_update_required = false;
+
+    if (_buttons[BUTTON_UP].unhandled_press)
     {
         // Increment BPM
         if (MAX_BPM > _current_bpm)
@@ -1037,9 +1078,32 @@ static bool _handle_metronome_settings_buttons(void)
             LOG_INFO("%u BPM", _current_bpm);
         }
 
-        _buttons[BUTTON_UP].pressed = false;
+        bpm_update_value = 2;
+        _buttons[BUTTON_UP].hold_repeat_count = 0;
+        _buttons[BUTTON_UP].unhandled_press = false;
     }
-    else if (_buttons[BUTTON_DOWN].pressed)
+    else
+    {
+        if (_buttons[BUTTON_UP].pressed && (MAX_BPM > _current_bpm))
+        {
+            if (_handle_held_button(BUTTON_UP, &bpm_update_value))
+            {
+                if ((_current_bpm + bpm_update_value) > MAX_BPM)
+                {
+                    _current_bpm = MAX_BPM;
+                }
+                else
+                {
+                    _current_bpm += (uint16_t) bpm_update_value;
+                }
+
+                LOG_INFO("%u BPM", _current_bpm);
+                lcd_update_required = true;
+            }
+        }
+    }
+
+    if (_buttons[BUTTON_DOWN].unhandled_press)
     {
         // Decrement BPM
         if (MIN_BPM < _current_bpm)
@@ -1049,9 +1113,32 @@ static bool _handle_metronome_settings_buttons(void)
             LOG_INFO("%u BPM", _current_bpm);
         }
 
-        _buttons[BUTTON_DOWN].pressed = false;
+        bpm_update_value = 2;
+        _buttons[BUTTON_DOWN].hold_repeat_count = 0;
+        _buttons[BUTTON_DOWN].unhandled_press = false;
     }
-    else if (_buttons[BUTTON_LEFT].pressed)
+    else
+    {
+        if (_buttons[BUTTON_DOWN].pressed && (MIN_BPM < _current_bpm))
+        {
+            if (_handle_held_button(BUTTON_DOWN, &bpm_update_value))
+            {
+                if (_current_bpm < (uint16_t) bpm_update_value)
+                {
+                    _current_bpm = MIN_BPM;
+                }
+                else
+                {
+                    _current_bpm -= (uint16_t) bpm_update_value;
+                }
+
+                LOG_INFO("%u BPM", _current_bpm);
+                lcd_update_required = true;
+            }
+        }
+    }
+
+    if (_buttons[BUTTON_LEFT].unhandled_press)
     {
         // Decrement beat count
         if (MIN_BEAT == _current_beat_count)
@@ -1065,9 +1152,9 @@ static bool _handle_metronome_settings_buttons(void)
 
         LOG_INFO("%u beats", _current_beat_count);
         lcd_update_required = true;
-        _buttons[BUTTON_LEFT].pressed = false;
+        _buttons[BUTTON_LEFT].unhandled_press = false;
     }
-    else if (_buttons[BUTTON_RIGHT].pressed)
+    else if (_buttons[BUTTON_RIGHT].unhandled_press)
     {
         // Decrement beat count
         if (MAX_BEAT == _current_beat_count)
@@ -1081,9 +1168,9 @@ static bool _handle_metronome_settings_buttons(void)
 
         LOG_INFO("%u beats", _current_beat_count);
         lcd_update_required = true;
-        _buttons[BUTTON_RIGHT].pressed = false;
+        _buttons[BUTTON_RIGHT].unhandled_press = false;
     }
-    else if (_buttons[BUTTON_SELECT].pressed)
+    else if (_buttons[BUTTON_SELECT].unhandled_press)
     {
         // Start/stop metronome
         if (!_metronome_running)
@@ -1097,7 +1184,7 @@ static bool _handle_metronome_settings_buttons(void)
             _stop_metronome();
         }
 
-        _buttons[BUTTON_SELECT].pressed = false;
+        _buttons[BUTTON_SELECT].unhandled_press = false;
     }
 
     return lcd_update_required;
@@ -1107,7 +1194,7 @@ static bool _handle_metronome_settings_buttons(void)
 static bool _handle_preset_edit_inputs(void)
 {
     bool lcd_update_required = false;
-    if (_buttons[BUTTON_ADD_DELETE].pressed || _buttons[BUTTON_MODE].pressed)
+    if (_buttons[BUTTON_ADD_DELETE].unhandled_press || _buttons[BUTTON_MODE].unhandled_press)
     {
         // Save current settings back to preset slot
         _save_preset(&_presets.presets[_current_preset_index].settings,
@@ -1119,8 +1206,8 @@ static bool _handle_preset_edit_inputs(void)
         _stop_metronome();
         _state_transition(STATE_PRESET_PLAYBACK);
 
-        _buttons[BUTTON_ADD_DELETE].pressed = false;
-        _buttons[BUTTON_MODE].pressed = false;
+        _buttons[BUTTON_ADD_DELETE].unhandled_press = false;
+        _buttons[BUTTON_MODE].unhandled_press = false;
     }
     else
     {
@@ -1141,7 +1228,7 @@ static bool _handle_edit_delete_menu_inputs(void)
     static const char *options[num_options] = {"Edit preset", "Delete preset", "Cancel"};
     static unsigned int selected = 0u;
 
-    if (_buttons[BUTTON_UP].pressed)
+    if (_buttons[BUTTON_UP].unhandled_press)
     {
         if (selected > 0u)
         {
@@ -1150,9 +1237,9 @@ static bool _handle_edit_delete_menu_inputs(void)
             LOG_INFO("selected: %s", options[selected]);
         }
 
-        _buttons[BUTTON_UP].pressed = false;
+        _buttons[BUTTON_UP].unhandled_press = false;
     }
-    else if (_buttons[BUTTON_DOWN].pressed)
+    else if (_buttons[BUTTON_DOWN].unhandled_press)
     {
         if (selected < (num_options - 1u))
         {
@@ -1161,9 +1248,9 @@ static bool _handle_edit_delete_menu_inputs(void)
             LOG_INFO("selected: %s", options[selected]);
         }
 
-        _buttons[BUTTON_DOWN].pressed = false;
+        _buttons[BUTTON_DOWN].unhandled_press = false;
     }
-    else if (_buttons[BUTTON_SELECT].pressed)
+    else if (_buttons[BUTTON_SELECT].unhandled_press)
     {
         if (2u == selected)
         {
@@ -1182,7 +1269,7 @@ static bool _handle_edit_delete_menu_inputs(void)
         }
 
         lcd_update_required = true;
-        _buttons[BUTTON_SELECT].pressed = false;
+        _buttons[BUTTON_SELECT].unhandled_press = false;
     }
 
     return lcd_update_required;
@@ -1197,7 +1284,7 @@ static bool _handle_preset_delete_inputs(void)
     static const char *options[num_options] = {"Yes", "No"};
     static unsigned int selected = 0u;
 
-    if (_buttons[BUTTON_UP].pressed)
+    if (_buttons[BUTTON_UP].unhandled_press)
     {
         if (selected > 0u)
         {
@@ -1206,9 +1293,9 @@ static bool _handle_preset_delete_inputs(void)
             LOG_INFO("selected: %s", options[selected]);
         }
 
-        _buttons[BUTTON_UP].pressed = false;
+        _buttons[BUTTON_UP].unhandled_press = false;
     }
-    else if (_buttons[BUTTON_DOWN].pressed)
+    else if (_buttons[BUTTON_DOWN].unhandled_press)
     {
         if (selected < (num_options - 1u))
         {
@@ -1217,9 +1304,9 @@ static bool _handle_preset_delete_inputs(void)
             LOG_INFO("selected: %s", options[selected]);
         }
 
-        _buttons[BUTTON_DOWN].pressed = false;
+        _buttons[BUTTON_DOWN].unhandled_press = false;
     }
-    else if (_buttons[BUTTON_SELECT].pressed)
+    else if (_buttons[BUTTON_SELECT].unhandled_press)
     {
         if (1u == selected)
         {
@@ -1238,6 +1325,7 @@ static bool _handle_preset_delete_inputs(void)
             _state_transition(STATE_PRESET_PLAYBACK);
         }
 
+        _buttons[BUTTON_SELECT].unhandled_press = false;
         lcd_update_required = true;
     }
 
@@ -1249,16 +1337,16 @@ static bool _handle_volume_inputs(void)
 {
     bool lcd_update_required = false;
 
-    if (_buttons[BUTTON_VOLUP].pressed)
+    if (_buttons[BUTTON_VOLUP].unhandled_press)
     {
         lcd_update_required = _increment_volume();
-        _buttons[BUTTON_VOLUP].pressed = false;
+        _buttons[BUTTON_VOLUP].unhandled_press = false;
         LOG_INFO("volume: %u%%", _volume);
     }
-    else if (_buttons[BUTTON_VOLDOWN].pressed)
+    else if (_buttons[BUTTON_VOLDOWN].unhandled_press)
     {
         lcd_update_required = _decrement_volume();
-        _buttons[BUTTON_VOLDOWN].pressed = false;
+        _buttons[BUTTON_VOLDOWN].unhandled_press = false;
         LOG_INFO("volume: %u%%", _volume);
     }
 
@@ -1270,7 +1358,7 @@ static bool _handle_metronome_inputs(void)
 {
     bool lcd_update_required = false;
 
-    if (_buttons[BUTTON_MODE].pressed)
+    if (_buttons[BUTTON_MODE].unhandled_press)
     {
         _saved_metronome_bpm = _current_bpm;
 
@@ -1285,7 +1373,7 @@ static bool _handle_metronome_inputs(void)
         _tc4_set_period(_current_bpm);
         _preset_change_complete = true;
     }
-    else if (_buttons[BUTTON_ADD_DELETE].pressed)
+    else if (_buttons[BUTTON_ADD_DELETE].unhandled_press)
     {
         if (MAX_PRESET_COUNT <= _presets.preset_count)
         {
@@ -1318,7 +1406,7 @@ static bool _handle_preset_playback_inputs(void)
 {
     bool lcd_update_required = false;
 
-    if (_buttons[BUTTON_UP].pressed)
+    if (_buttons[BUTTON_UP].unhandled_press)
     {
         unsigned int new_index = (_current_preset_index + 1u) % _presets.preset_count;
         if (_metronome_running)
@@ -1337,9 +1425,9 @@ static bool _handle_preset_playback_inputs(void)
             _preset_change_complete = true;
         }
 
-        _buttons[BUTTON_UP].pressed = false;
+        _buttons[BUTTON_UP].unhandled_press = false;
     }
-    else if (_buttons[BUTTON_DOWN].pressed)
+    else if (_buttons[BUTTON_DOWN].unhandled_press)
     {
         unsigned int new_index = (0u == _current_preset_index) ? _presets.preset_count - 1u :
                                                                  _current_preset_index - 1u;
@@ -1359,9 +1447,9 @@ static bool _handle_preset_playback_inputs(void)
             _preset_change_complete = true;
         }
 
-        _buttons[BUTTON_DOWN].pressed = false;
+        _buttons[BUTTON_DOWN].unhandled_press = false;
     }
-    else if (_buttons[BUTTON_SELECT].pressed)
+    else if (_buttons[BUTTON_SELECT].unhandled_press)
     {
         // Start/stop metronome
         if (!_metronome_running)
@@ -1375,16 +1463,16 @@ static bool _handle_preset_playback_inputs(void)
             _stop_metronome();
         }
 
-        _buttons[BUTTON_SELECT].pressed = false;
+        _buttons[BUTTON_SELECT].unhandled_press = false;
     }
-    else if (_buttons[BUTTON_MODE].pressed)
+    else if (_buttons[BUTTON_MODE].unhandled_press)
     {
         // Switch to metronome state (also clears button states)
         _state_transition(STATE_METRONOME);
         _current_bpm = _saved_metronome_bpm;
         lcd_update_required = true;
     }
-    else if (_buttons[BUTTON_ADD_DELETE].pressed)
+    else if (_buttons[BUTTON_ADD_DELETE].unhandled_press)
     {
         // Switch to edit/delete menu state
         _state_transition(STATE_PRESET_EDIT_DELETE_MENU);
@@ -1493,13 +1581,13 @@ static bool _change_alphanum_col(bool increment)
 static bool _handle_name_entry_inputs(void)
 {
     bool lcd_update_required = false;
-    if (_buttons[BUTTON_MODE].pressed || _buttons[BUTTON_ADD_DELETE].pressed)
+    if (_buttons[BUTTON_MODE].unhandled_press || _buttons[BUTTON_ADD_DELETE].unhandled_press)
     {
         // Cancel, switch back to metronome state (also clears button states)
         _state_transition(STATE_METRONOME);
         lcd_update_required = true;
     }
-    else if (_buttons[BUTTON_SELECT].pressed)
+    else if (_buttons[BUTTON_SELECT].unhandled_press)
     {
         char selected = _alphanum_table[_alphanum_row][_alphanum_col];
         if ('<' == selected)
@@ -1539,27 +1627,27 @@ static bool _handle_name_entry_inputs(void)
             }
         }
 
-        _buttons[BUTTON_SELECT].pressed = false;
+        _buttons[BUTTON_SELECT].unhandled_press = false;
     }
-    else if (_buttons[BUTTON_UP].pressed)
+    else if (_buttons[BUTTON_UP].unhandled_press)
     {
         lcd_update_required = _change_alphanum_row(false);
-        _buttons[BUTTON_UP].pressed = false;
+        _buttons[BUTTON_UP].unhandled_press = false;
     }
-    else if (_buttons[BUTTON_DOWN].pressed)
+    else if (_buttons[BUTTON_DOWN].unhandled_press)
     {
         lcd_update_required = _change_alphanum_row(true);
-        _buttons[BUTTON_DOWN].pressed = false;
+        _buttons[BUTTON_DOWN].unhandled_press = false;
     }
-    else if (_buttons[BUTTON_LEFT].pressed)
+    else if (_buttons[BUTTON_LEFT].unhandled_press)
     {
         lcd_update_required = _change_alphanum_col(false);
-        _buttons[BUTTON_LEFT].pressed = false;
+        _buttons[BUTTON_LEFT].unhandled_press = false;
     }
-    else if (_buttons[BUTTON_RIGHT].pressed)
+    else if (_buttons[BUTTON_RIGHT].unhandled_press)
     {
         lcd_update_required = _change_alphanum_col(true);
-        _buttons[BUTTON_RIGHT].pressed = false;
+        _buttons[BUTTON_RIGHT].unhandled_press = false;
     }
 
     return lcd_update_required;
@@ -1569,7 +1657,7 @@ static bool _handle_name_entry_inputs(void)
 // Returns true if screen update is required.
 static bool _handle_inputs(void)
 {
-    unsigned int buttons_pressed = 0u;
+    bool button_changes = 0u;
 
     // Handle debouncing for buttons
     for (unsigned int i = 0u; i < BUTTON_COUNT; i++)
@@ -1577,13 +1665,17 @@ static bool _handle_inputs(void)
         switch(_buttons[i].state)
         {
             case DEBOUNCE_IDLE:
-                // Nothing to do
-                continue;
+                if (_buttons[i].pressed)
+                {
+                    // make sure we keep running input handlers if button is held
+                    button_changes = true;
+                }
                 break;
             case DEBOUNCE_FORCE:
                 // Special case for CLI injected inputs, force pressed despite no GPIO state change
                 _buttons[i].state = DEBOUNCE_IDLE;
-                buttons_pressed += 1u;
+                _buttons[i].unhandled_press = true;
+                button_changes = true;
                 break;
             case DEBOUNCE_START:
                 // Start debouncing this signal
@@ -1596,15 +1688,18 @@ static bool _handle_inputs(void)
                 unsigned long elapsed = millis() - _buttons[i].start_ms;
                 if (BUTTON_DEBOUNCE_MS <= elapsed)
                 {
-                    if (digitalRead(_buttons[i].gpio_pin) == _buttons[i].pressed_state)
+                    int pinval = digitalRead(_buttons[i].gpio_pin);
+                    bool is_pressed = (pinval == _buttons[i].pressed_state);
+                    if (is_pressed != _buttons[i].pressed)
                     {
-                        // Button is pressed after debounce
-                        _buttons[i].pressed = true;
-                        buttons_pressed += 1u;
+                        // Button state has changed after debounce period
+                        _buttons[i].pressed = is_pressed;
+                        _buttons[i].unhandled_press = is_pressed;
+                        button_changes = true;
                     }
 
                     // Re-enable interrupt for this pin
-                    attachInterrupt(digitalPinToInterrupt(_buttons[i].gpio_pin),
+                    attachInterrupt(_buttons[i].gpio_pin,
                                     _buttons[i].callback,
                                     (_buttons[i].pressed_state) ? RISING : FALLING);
 
@@ -1615,13 +1710,13 @@ static bool _handle_inputs(void)
         }
     }
 
-    if (0u == buttons_pressed)
+    if (!button_changes)
     {
-        // If no buttons have been pressed, we can stop here
+        // If no button states have changed, we can stop here
         return false;
     }
 
-    // Handle any buttons that have been pressed
+    // Handle any button states that have changed
     bool lcd_update_required = false;
     switch (_current_state)
     {
@@ -1661,9 +1756,9 @@ void setup()
     for (unsigned int i = 0u; i < BUTTON_COUNT; i++)
     {
         pinMode(_buttons[i].gpio_pin, INPUT_PULLUP);
-        attachInterrupt(digitalPinToInterrupt(_buttons[i].gpio_pin),
-                                              _buttons[i].callback,
-                                              (_buttons[i].pressed_state) ? RISING : FALLING);
+        attachInterrupt(_buttons[i].gpio_pin,
+                        _buttons[i].callback,
+                        (_buttons[i].pressed_state) ? RISING : FALLING);
     }
 
     // Configure TC4 as a 32-bit counter counting at 48MHz. TC4 is used to
