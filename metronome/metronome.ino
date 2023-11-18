@@ -383,6 +383,14 @@ static bool _decrement_volume(void)
     return changed;
 }
 
+static volatile bool _woke_up = false;
+
+// GPIO interrupt handler for waking up from deep sleep via on/off switch
+void _poweron_handler(void)
+{
+    _woke_up = true;
+}
+
 // Disable all interrupts, set all pins to inputs, and save presets to flash
 static void _power_off(void)
 {
@@ -391,15 +399,14 @@ static void _power_off(void)
     TC4->COUNT32.INTENSET.bit.MC0 = 0;
     while (_tc4_syncing());
 
-    // Set builtin LED pin to floating input
-    pinMode(13, INPUT);
-
-    // Disable all GPIO interrupts and configure pins as floating inputs
-    for (unsigned int i = 0u; i < BUTTON_COUNT; i++)
+    // Disable all GPIO interrupts and configure pins as floating inputs (EXCEPT on/off switch pin)
+    for (unsigned int i = 0u; i < BUTTON_COUNT - 1; i++)
     {
         pinMode(_buttons[i].gpio_pin, INPUT);
-        detachInterrupt(digitalPinToInterrupt(_buttons[i].gpio_pin));
+        detachInterrupt(_buttons[i].gpio_pin);
     }
+
+    detachInterrupt(_buttons[BUTTON_ON_OFF_SWITCH].gpio_pin);
 
 #if ENABLE_FLASH_WRITE
     uint32_t new_crc = _calc_preset_crc();
@@ -425,6 +432,10 @@ static void _power_off(void)
     delay(100);
     Serial.end();
 #endif // ENABLE_UART_LOGGING || ENABLE_UART_CLI
+
+    // Attach GPIO interrupt for waking up
+    LowPower.attachInterruptWakeup(_buttons[BUTTON_ON_OFF_SWITCH].gpio_pin,
+                            _poweron_handler, CHANGE);
 
     // Go into low power mode forever
     LowPower.deepSleep();
@@ -895,7 +906,6 @@ static void _tc4_reset(void)
 void TC4_Handler(void)
 {
     _start_streaming_next_beat();
-    digitalWrite(13, !digitalRead(13));
     TC4->COUNT32.INTFLAG.bit.MC0 = 1; //Writing a 1 to INTFLAG.bit.MC0 clears the interrupt so that it will run again
 }
 
@@ -1811,5 +1821,12 @@ void loop()
     if (_buttons[BUTTON_ON_OFF_SWITCH].unhandled_press)
     {
         _power_off();
+        _buttons[BUTTON_ON_OFF_SWITCH].unhandled_press = false;
+
+        if (_woke_up)
+        {
+            _woke_up = false;
+            setup();
+        }
     }
 }
