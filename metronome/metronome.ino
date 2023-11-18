@@ -54,6 +54,7 @@
  */
 
 #include "metronome_beep_samples.h"
+#include "metronome_config.h"
 #include "ModifiedI2S.h"
 
 #include <stdarg.h>
@@ -67,55 +68,18 @@
 // Version number reported by CLI
 #define METRONOME_SKETCH_VERSION "0.0.1"
 
-// If 0, no log messages will be sent to the UART
-#define ENABLE_UART_LOGGING      (1u)
-
-// If 0, CLI interface will not be available
-#define ENABLE_UART_CLI          (1u)
-
 // Only used for debugging, useful if testing something unrelated to
 // preset storage and want to avoid wasting flash write cycles
 #define ENABLE_FLASH_WRITE       (1u)
-
-// Time between value increments when holding a button down, in milliseconds
-#define BUTTON_HOLD_CHANGE_MS    (300u)
-
-// When holding down a button, the value increment will be doubled after this many #BUTTON_HOLD_CHANGE_MS periods
-#define BUTTON_HOLD_DOUBLE_COUNT (8u)
-
-// When holding down a button, the value increment will be doubled no more than this many times
-#define BUTTON_HOLD_MAX_DOUBLES  (4u)
 
 
 // I2S sample rate and sample width
 #define SAMPLE_RATE              (44100)
 #define SAMPLE_WIDTH             (16)
 
-// GPIO pin numbers for 20x4 character LCD (0, 1 and 9 are needed by I2S library).
-// 13 is the builtin LED, which is used to show when we are streaming samples to
-// the I2S DAC)
-#define LCD_RS_PIN               (2)
-#define LCD_EN_PIN               (3)
-#define LCD_D4_PIN               (4)
-#define LCD_D5_PIN               (5)
-#define LCD_D6_PIN               (6)
-#define LCD_D7_PIN               (7)
-
-// GPIO pin numbers for buttons
-#define UP_BUTTON_PIN            (20)
-#define DOWN_BUTTON_PIN          (A1)
-#define LEFT_BUTTON_PIN          (A2)
-#define RIGHT_BUTTON_PIN         (A3)
-#define SELECT_BUTTON_PIN        (A4)
-#define MODE_BUTTON_PIN          (21)
-#define VOLUP_BUTTON_PIN         (10)
-#define VOLDOWN_BUTTON_PIN       (11)
-#define ADD_DEL_BUTTON_PIN       (12)
-
 
 #define MAX_PRESET_NAME_LEN      (32u)   // Max. number of characters for a preset name string
 #define MAX_PRESET_COUNT         (128u)  // Max. number of presets that can be saved in flash
-#define BUTTON_DEBOUNCE_MS       (100u)  // Button debounce time, milliseconds
 #define MIN_BPM                  (1u)    // Min. allowed BPM value
 #define MAX_BPM                  (512u)  // Max. allowed BPM value
 #define MIN_BEAT                 (1u)    // Min. allowed beat value
@@ -155,6 +119,7 @@ typedef enum
     BUTTON_ADD_DELETE,
     BUTTON_VOLUP,
     BUTTON_VOLDOWN,
+    BUTTON_ON_OFF_SWITCH,
     BUTTON_COUNT
 } button_e;
 
@@ -217,7 +182,6 @@ typedef struct
 static void _presets_cmd_handler(char *cmd_args);
 static void _version_cmd_handler(char *cmd_args);
 static void _addpreset_cmd_handler(char *cmd_args);
-static void _poweroff_cmd_handler(char *cmd_args);
 static void _help_cmd_handler(char *cmd_args);
 static void _up_cmd_handler(char *cmd_args);
 static void _down_cmd_handler(char *cmd_args);
@@ -228,6 +192,7 @@ static void _mode_cmd_handler(char *cmd_args);
 static void _add_del_cmd_handler(char *cmd_args);
 static void _volup_cmd_handler(char *cmd_args);
 static void _voldown_cmd_handler(char *cmd_args);
+static void _poweroff_cmd_handler(char *cmd_args);
 
 
 // Number of CLI commands we can handle (must be manually synced with _cli_commands)
@@ -272,6 +237,7 @@ void _mode_button_callback(void) { _gpio_callback(BUTTON_MODE); }
 void _add_delete_button_callback(void) { _gpio_callback(BUTTON_ADD_DELETE); }
 void _volup_button_callback(void) { _gpio_callback(BUTTON_VOLUP); }
 void _voldown_button_callback(void) { _gpio_callback(BUTTON_VOLDOWN); }
+void _off_switch_callback(void) { _gpio_callback(BUTTON_ON_OFF_SWITCH); }
 
 
 // State tracking/debouncing for all buttons
@@ -285,7 +251,8 @@ static volatile button_info_t _buttons[BUTTON_COUNT] =
     {false, false, LOW, DEBOUNCE_IDLE, 0u, 0u, _mode_button_callback, MODE_BUTTON_PIN},          // BUTTON_MODE
     {false, false, LOW, DEBOUNCE_IDLE, 0u, 0u, _add_delete_button_callback, ADD_DEL_BUTTON_PIN}, // BUTTON_ADD_DELETE
     {false, false, LOW, DEBOUNCE_IDLE, 0u, 0u, _volup_button_callback, VOLUP_BUTTON_PIN},        // BUTTON_VOLUP
-    {false, false, LOW, DEBOUNCE_IDLE, 0u, 0u, _voldown_button_callback, VOLDOWN_BUTTON_PIN}     // BUTTON_VOLDOWN
+    {false, false, LOW, DEBOUNCE_IDLE, 0u, 0u, _voldown_button_callback, VOLDOWN_BUTTON_PIN},    // BUTTON_VOLDOWN
+    {false, false, LOW, DEBOUNCE_IDLE, 0u, 0u, _off_switch_callback, ON_OFF_SWITCH_PIN}          // BUTTON_ON_OFF_SWITCH
 };
 
 // Runtime values for BPM, beat count, metronome mode, and preset index
@@ -358,7 +325,7 @@ static unsigned int _volume = 100u;
 #define LOG_ERROR(fmt, ...) log("ERROR", __func__, __LINE__, fmt, ##__VA_ARGS__)
 
 // Formats and prints a debug message to the UART
-static void log(const char *level, const char *func, int line, char *fmt, ...)
+static void log(const char *level, const char *func, int line, const char *fmt, ...)
 {
     char msg_buf[256u];
     float time_s = ((float) millis()) / 1000.0f;
@@ -481,6 +448,7 @@ static void _gpio_callback(button_e button)
 // 'help' CLI command handler
 static void _help_cmd_handler(char *cmd_args)
 {
+    (void) cmd_args;
     Serial.println("-------- CLI command reference ---------");
     Serial.print("Version ");
     Serial.println(METRONOME_SKETCH_VERSION);
@@ -505,6 +473,7 @@ static void _help_cmd_handler(char *cmd_args)
 // 'show software version' CLI command handler
 static void _version_cmd_handler(char *cmd_args)
 {
+    (void) cmd_args;
     Serial.print("Arduino Zero Stage Metronome ");
     Serial.println(METRONOME_SKETCH_VERSION);
 }
@@ -512,6 +481,7 @@ static void _version_cmd_handler(char *cmd_args)
 // 'dump presets' CLI command handler
 static void _presets_cmd_handler(char *cmd_args)
 {
+    (void) cmd_args;
     Serial.print(_presets.preset_count);
     Serial.println(" preset(s) saved");
 
@@ -605,7 +575,7 @@ static void _addpreset_cmd_handler(char *cmd_args)
             if (endptr && (*endptr == '\0'))
             {
                 metronome_preset_t *preset_slot = &_presets.presets[_presets.preset_count];
-                for (int i = 0; (i < sizeof(preset_slot->name)) && *cmd_args; i++, cmd_args++)
+                for (int i = 0; (i < (int) sizeof(preset_slot->name)) && *cmd_args; i++, cmd_args++)
                 {
                     if (*cmd_args == '\n')
                     {
@@ -639,12 +609,6 @@ static void _addpreset_cmd_handler(char *cmd_args)
     }
 }
 
-// 'power off' CLI command handler
-static void _poweroff_cmd_handler(char *cmd_args)
-{
-    _power_off();
-}
-
 // Generic simulated button press CLI command handler
 static void _button_cli_handler(button_e button)
 {
@@ -652,15 +616,16 @@ static void _button_cli_handler(button_e button)
 }
 
 // CLI command handlers for simulated button presses
-static void _up_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_UP); }
-static void _down_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_DOWN); }
-static void _left_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_LEFT); }
-static void _right_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_RIGHT); }
-static void _select_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_SELECT); }
-static void _mode_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_MODE); }
-static void _add_del_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_ADD_DELETE); }
-static void _volup_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_VOLUP); }
-static void _voldown_cmd_handler(char *cmd_args) { _button_cli_handler(BUTTON_VOLDOWN); }
+static void _up_cmd_handler(char *cmd_args)       { (void) cmd_args; _button_cli_handler(BUTTON_UP); }
+static void _down_cmd_handler(char *cmd_args)     { (void) cmd_args; _button_cli_handler(BUTTON_DOWN); }
+static void _left_cmd_handler(char *cmd_args)     { (void) cmd_args; _button_cli_handler(BUTTON_LEFT); }
+static void _right_cmd_handler(char *cmd_args)    { (void) cmd_args; _button_cli_handler(BUTTON_RIGHT); }
+static void _select_cmd_handler(char *cmd_args)   { (void) cmd_args; _button_cli_handler(BUTTON_SELECT); }
+static void _mode_cmd_handler(char *cmd_args)     { (void) cmd_args; _button_cli_handler(BUTTON_MODE); }
+static void _add_del_cmd_handler(char *cmd_args)  { (void) cmd_args; _button_cli_handler(BUTTON_ADD_DELETE); }
+static void _volup_cmd_handler(char *cmd_args)    { (void) cmd_args; _button_cli_handler(BUTTON_VOLUP); }
+static void _voldown_cmd_handler(char *cmd_args)  { (void) cmd_args; _button_cli_handler(BUTTON_VOLDOWN); }
+static void _poweroff_cmd_handler(char *cmd_args) { (void) cmd_args; _button_cli_handler(BUTTON_ON_OFF_SWITCH); }
 
 
 // Read CLI commands from serial port, and run command handlers if required
@@ -817,7 +782,6 @@ static void _send_onebuf_silence(void)
 // I2S transfer complete function, provides the next chunk of audio samples for I2S DAC
 static void _i2s_complete_handler(void)
 {
-    static volatile int silence_bufs_sent = 0;
     static bool final_silence_sent = false;
 
     if (_beep_samples_pos >= BEEP_SAMPLE_COUNT)
@@ -845,7 +809,7 @@ static void _i2s_complete_handler(void)
 
     // Copy samples to sample buf, modifying for current volume as we go
     float fvol = ((float) _volume) / 100.0f;
-    for (int i = 0; i < samples_to_send; i++)
+    for (uint32_t i = 0u; i < samples_to_send; i++)
     {
         _sample_buf[i] = (uint16_t) (((float) _beep_samples[_beep_samples_pos + i]) * fvol);
     }
@@ -1016,6 +980,9 @@ static void _state_transition(metronome_state_e new_state)
         case STATE_PRESET_NAME_ENTRY:
             statename = "Preset name entry";
             break;
+        default:
+            statename = "Unrecognized state";
+            break;
     }
     LOG_INFO("changing to state '%s'", statename);
 
@@ -1088,7 +1055,7 @@ static bool _handle_metronome_settings_buttons(void)
         {
             if (_handle_held_button(BUTTON_UP, &bpm_update_value))
             {
-                if ((_current_bpm + bpm_update_value) > MAX_BPM)
+                if ((_current_bpm + (uint16_t) bpm_update_value) > MAX_BPM)
                 {
                     _current_bpm = MAX_BPM;
                 }
@@ -1738,6 +1705,9 @@ static bool _handle_inputs(void)
         case STATE_PRESET_NAME_ENTRY:
             lcd_update_required = _handle_name_entry_inputs();
             break;
+        default:
+            LOG_ERROR("Unrecognized state (%d)", _current_state);
+            break;
     }
 
     return lcd_update_required;
@@ -1748,9 +1718,6 @@ void setup()
 
     // Required for snprintf to support floats :(
     asm(".global _printf_float");
-
-    // Use built-in LED to show when we are streaming samples to I2S device
-    pinMode(13, OUTPUT);
 
     // Configure button input pins
     for (unsigned int i = 0u; i < BUTTON_COUNT; i++)
@@ -1797,7 +1764,7 @@ void setup()
     }
     ModifiedI2S.disable();
 
-    LOG_INFO("Version "METRONOME_SKETCH_VERSION);
+    LOG_INFO("Version " METRONOME_SKETCH_VERSION);
     LOG_INFO("preset store is %u bytes", sizeof(_presets));
     LOG_INFO("flash writes %s", (ENABLE_FLASH_WRITE) ? "enabled" : "disabled");
 
@@ -1838,5 +1805,11 @@ void loop()
     {
         // _handle_inputs returns true if the char LCD needs to be re-drawn
         _update_char_lcd();
+    }
+
+    // Handle on/off switch in all states
+    if (_buttons[BUTTON_ON_OFF_SWITCH].unhandled_press)
+    {
+        _power_off();
     }
 }
