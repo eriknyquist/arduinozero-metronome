@@ -29,12 +29,12 @@
 
 // GPIO pin numbers for 20x4 character LCD (0, 1 and 9 are needed by I2S library).
 // 13 is the builtin LED, which is used to flash in sync with the click sound)
-#define LCD_RS_PIN               (A0)
-#define LCD_EN_PIN               (A1)
-#define LCD_D4_PIN               (A2)
-#define LCD_D5_PIN               (A3)
-#define LCD_D6_PIN               (A4)
-#define LCD_D7_PIN               (A5)
+#define LCD_RS_PIN               (A5)
+#define LCD_EN_PIN               (A4)
+#define LCD_D4_PIN               (A3)
+#define LCD_D5_PIN               (A2)
+#define LCD_D6_PIN               (A1)
+#define LCD_D7_PIN               (A0)
 
 // GPIO pin numbers for buttons
 #define UP_BUTTON_PIN            (2)
