@@ -280,7 +280,6 @@ static uint32_t _preset_crc_on_boot = 0u;
 static volatile bool _woke_up = false;
 
 
-// GPIO interrupt handler for waking up from deep sleep via on/off switch
 // Table of alphanumeric characters, used for preset name entry. '<' represents
 // a backspace, '_' represents a space character, and '*' represents a 'done/save' button.
 // All of those symbols may be drawn differently on the character LCD.
@@ -434,7 +433,7 @@ static void _power_off(void)
 
     // Attach GPIO interrupt for waking up
     LowPower.attachInterruptWakeup(_buttons[BUTTON_ON_OFF_SWITCH].gpio_pin,
-                            _poweron_handler, CHANGE);
+                                   _poweron_handler, CHANGE);
 
     // Go into low power mode forever
     LowPower.deepSleep();
