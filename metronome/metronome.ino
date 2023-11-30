@@ -8,7 +8,7 @@
  *
  * - 1 toggle switch for power
  *
- * - 7 push buttons for setting BPM/beat, and for creating/naming/deleting presets
+ * - 9 push buttons for setting BPM/beat, volume, and creating/naming/deleting presets
  *
  * - 20x4 character LCD
  *
@@ -216,10 +216,6 @@ static cli_command_t _cli_commands[CLI_COMMAND_COUNT] =
     {"+", _volup_cmd_handler},
     {"-", _voldown_cmd_handler}
 };
-
-// Serial input buffer for CLI commands
-static char _cli_buf[64u];
-static unsigned int _cli_buf_pos = 0u;
 #endif // ENABLE_UART_CLI
 
 
@@ -280,6 +276,11 @@ static volatile bool _preset_change_complete = false;
 // Holds the CRC value for presets loaded from flash on boot
 static uint32_t _preset_crc_on_boot = 0u;
 
+// Flag set by _poweron_handler when we are woken up by the power switch
+static volatile bool _woke_up = false;
+
+
+// GPIO interrupt handler for waking up from deep sleep via on/off switch
 // Table of alphanumeric characters, used for preset name entry. '<' represents
 // a backspace, '_' represents a space character, and '*' represents a 'done/save' button.
 // All of those symbols may be drawn differently on the character LCD.
@@ -383,10 +384,8 @@ static bool _decrement_volume(void)
     return changed;
 }
 
-static volatile bool _woke_up = false;
-
-// GPIO interrupt handler for waking up from deep sleep via on/off switch
-void _poweron_handler(void)
+// Runs when we are woken from deep sleep by the power switch
+static void _poweron_handler(void)
 {
     _woke_up = true;
 }
@@ -642,14 +641,18 @@ static void _poweroff_cmd_handler(char *cmd_args) { (void) cmd_args; _button_cli
 // Read CLI commands from serial port, and run command handlers if required
 static void _handle_cli_commands(void)
 {
+    // Serial input buffer for CLI commands
+    static char cli_buf[128u];
+    static unsigned int cli_buf_pos = 0u;
+
     bool line_received = false;
 
     while (Serial.available() > 0)
     {
-        if (sizeof(_cli_buf) <= _cli_buf_pos)
+        if (sizeof(cli_buf) <= cli_buf_pos)
         {
             LOG_ERROR("CLI overrun!");
-            _cli_buf_pos = 0u;
+            cli_buf_pos = 0u;
             return;
         }
 
@@ -657,17 +660,17 @@ static void _handle_cli_commands(void)
         if ('\n' == c)
         {
             // Line complete, add null terminator
-            _cli_buf[_cli_buf_pos] = '\0';
+            cli_buf[cli_buf_pos] = '\0';
             line_received = true;
             break;
         }
         else
         {
             // Ignore leading spaces at beginning of line
-            if (!IS_SPACE(c) || (_cli_buf_pos > 0u))
+            if (!IS_SPACE(c) || (cli_buf_pos > 0u))
             {
-                _cli_buf[_cli_buf_pos] = c;
-                _cli_buf_pos += 1u;
+                cli_buf[cli_buf_pos] = c;
+                cli_buf_pos += 1u;
             }
         }
     }
@@ -680,11 +683,11 @@ static void _handle_cli_commands(void)
 
     // Find the end of the command word
     unsigned int cmd_word_end = 0u;
-    for (; cmd_word_end < sizeof(_cli_buf); cmd_word_end++)
+    for (; cmd_word_end < sizeof(cli_buf); cmd_word_end++)
     {
-        if (IS_SPACE(_cli_buf[cmd_word_end]))
+        if (IS_SPACE(cli_buf[cmd_word_end]))
         {
-            _cli_buf[cmd_word_end] = '\0';
+            cli_buf[cmd_word_end] = '\0';
             break;
         }
     }
@@ -693,21 +696,21 @@ static void _handle_cli_commands(void)
     bool recognized_command = false;
     for (unsigned int i = 0u; i < CLI_COMMAND_COUNT; i++)
     {
-        if (0 == strncmp(_cli_commands[i].cmd_word, _cli_buf, sizeof(_cli_buf)))
+        if (0 == strncmp(_cli_commands[i].cmd_word, cli_buf, sizeof(cli_buf)))
         {
             // Run handler, pass a pointer to the characters after the command word
             recognized_command = true;
-            _cli_commands[i].cmd_handler(_cli_buf + cmd_word_end + 1u);
+            _cli_commands[i].cmd_handler(cli_buf + cmd_word_end + 1u);
             break;
         }
     }
 
     if (!recognized_command)
     {
-        LOG_ERROR("unrecognized command '%s'", _cli_buf);
+        LOG_ERROR("unrecognized command '%s'", cli_buf);
     }
 
-    _cli_buf_pos = 0u;
+    cli_buf_pos = 0u;
 }
 #endif // ENABLE_UART_CLI
 
@@ -790,7 +793,25 @@ static void _send_onebuf_silence(void)
     ModifiedI2S.write(silence, sizeof(silence));
 }
 
-// I2S transfer complete function, provides the next chunk of audio samples for I2S DAC
+/* I2S transfer complete function, provides the next chunk of audio samples for I2S DAC.
+ *
+ * Through trial and error (so take with a grain of salt), the following method was found
+ * to work well for producing clear playback of short audio clips without any unwanted pops/clicks:
+ *
+ * 1. Start by sending a small number of silent samples (all 0s). In this case we send
+ *    SAMPLE_BUF_LEN samples of silence to begin.
+ *
+ * 2. Send all samples for the audio clip
+ *
+ * 3. Send a final buffer of silence (SAMPLE_BUF_LEN samples are sent again in this case)
+ *
+ * 4. Wait until all samples have been sent to the I2S DAC (since the I2S library uses a
+ *    double buffer, there should be *two* invocations of _i2s_complete_handler after
+ *    the final buffer of samples has been provided via ModifiedI2S.write), and disable the
+ *    I2S hardware. The I2S hardware will remain disabled until it's time to play the next
+ *    audio clip. The "disable", "enable", and "remainingBytesToTransmit" functions have been
+ *    added to ModifiedI2S.cpp to facilitate this.
+ */
 static void _i2s_complete_handler(void)
 {
     static bool final_silence_sent = false;
@@ -927,7 +948,7 @@ static void _start_metronome(void)
 // Stop metronome (disable timer interrupt)
 static void _stop_metronome(void)
 {
-    // Start timer/counter, if runnning
+    // Stop timer/counter, if runnning
     if ((TC4->COUNT32.CTRLA.reg & TC_CTRLA_ENABLE) > 0u)
     {
         TC4->COUNT32.CTRLA.reg &= ~TC_CTRLA_ENABLE;

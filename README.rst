@@ -87,7 +87,7 @@ Hardware required
 * `Arduino Zero <https://store.arduino.cc/products/arduino-zero>`_ (Must be an Arduino Zero. Uno or other boards will not work.)
 * `Adafruit 20x4 character LCD screen <https://www.adafruit.com/product/198>`_
 * `HiLetgo PCM5102 I2S DAC <https://www.amazon.com/HiLetgo-Lossless-Digital-Converter-Raspberry/dp/B07Q9K5MT8>`_
-* 8 pushbuttons, of whichever kind you want
+* 9 pushbuttons, of whichever kind you want
 * 1 toggle switch, of whichever kind you want
 
 Wiring Diagram
