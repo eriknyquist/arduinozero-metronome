@@ -357,6 +357,71 @@ FlashStorage(preset_store, metronome_presets_t);
 LiquidCrystal lcd(LCD_RS_PIN, LCD_EN_PIN, LCD_D4_PIN, LCD_D5_PIN, LCD_D6_PIN, LCD_D7_PIN);
 
 
+// Wait for TC4 to be not busy
+static bool _tc4_syncing(void)
+{
+    return TC4->COUNT32.STATUS.reg & TC_STATUS_SYNCBUSY;
+}
+
+// Reset (stop) TC4 timer
+static void _tc4_reset(void)
+{
+    TC4->COUNT32.CTRLA.reg = TC_CTRLA_SWRST;
+    while (_tc4_syncing());
+    while (TC4->COUNT32.CTRLA.bit.SWRST);
+}
+
+// Change TC4 counter period, stops timer first if needed
+static void _tc4_set_period(uint16_t bpm)
+{
+    // Stop timer/counter, if runnning
+    bool timer_was_running = false;
+    if ((TC4->COUNT32.CTRLA.reg & TC_CTRLA_ENABLE) > 0u)
+    {
+        TC4->COUNT32.CTRLA.reg &= ~TC_CTRLA_ENABLE;
+        timer_was_running = true;
+    }
+
+    // Set new period
+    TC4->COUNT32.CC[0].reg = (TRUE_CORE_CLOCK_HZ * 60UL) / (uint32_t) bpm;
+
+    while (_tc4_syncing());
+
+    if (timer_was_running)
+    {
+        // Re-start timer/counter
+        TC4->COUNT32.CTRLA.reg |= TC_CTRLA_ENABLE;
+        while (_tc4_syncing());
+    }
+}
+
+// Start metronome with current settings (enable timer interrupt)
+static void _start_metronome(void)
+{
+    // Reset beat count
+    _current_beat = MIN_BEAT;
+
+    // Start timer/counter, if runnning
+    if ((TC4->COUNT32.CTRLA.reg & TC_CTRLA_ENABLE) == 0u)
+    {
+        TC4->COUNT32.CTRLA.reg |= TC_CTRLA_ENABLE;
+        _metronome_running = true;
+        LOG_INFO("starting metronome");
+    }
+}
+
+// Stop metronome (disable timer interrupt)
+static void _stop_metronome(void)
+{
+    // Stop timer/counter, if runnning
+    if ((TC4->COUNT32.CTRLA.reg & TC_CTRLA_ENABLE) > 0u)
+    {
+        TC4->COUNT32.CTRLA.reg &= ~TC_CTRLA_ENABLE;
+        _metronome_running = false;
+        LOG_INFO("stopping metronome");
+    }
+}
+
 // Increment volume by 10%
 static bool _increment_volume(void)
 {
@@ -908,76 +973,11 @@ static void _start_streaming_next_beat(void)
     }
 }
 
-// Wait for TC4 to be not busy
-static bool _tc4_syncing(void)
-{
-    return TC4->COUNT32.STATUS.reg & TC_STATUS_SYNCBUSY;
-}
-
-// Reset (stop) TC4 timer
-static void _tc4_reset(void)
-{
-    TC4->COUNT32.CTRLA.reg = TC_CTRLA_SWRST;
-    while (_tc4_syncing());
-    while (TC4->COUNT32.CTRLA.bit.SWRST);
-}
-
 // Interrupt handler for TC4
 void TC4_Handler(void)
 {
     _start_streaming_next_beat();
     TC4->COUNT32.INTFLAG.bit.MC0 = 1; //Writing a 1 to INTFLAG.bit.MC0 clears the interrupt so that it will run again
-}
-
-// Start metronome with current settings (enable timer interrupt)
-static void _start_metronome(void)
-{
-    // Reset beat count
-    _current_beat = MIN_BEAT;
-
-    // Start timer/counter, if runnning
-    if ((TC4->COUNT32.CTRLA.reg & TC_CTRLA_ENABLE) == 0u)
-    {
-        TC4->COUNT32.CTRLA.reg |= TC_CTRLA_ENABLE;
-        _metronome_running = true;
-        LOG_INFO("starting metronome");
-    }
-}
-
-// Stop metronome (disable timer interrupt)
-static void _stop_metronome(void)
-{
-    // Stop timer/counter, if runnning
-    if ((TC4->COUNT32.CTRLA.reg & TC_CTRLA_ENABLE) > 0u)
-    {
-        TC4->COUNT32.CTRLA.reg &= ~TC_CTRLA_ENABLE;
-        _metronome_running = false;
-        LOG_INFO("stopping metronome");
-    }
-}
-
-// Change TC4 counter period, stops timer first if needed
-static void _tc4_set_period(unsigned int bpm)
-{
-    // Stop timer/counter, if runnning
-    bool timer_was_running = false;
-    if ((TC4->COUNT32.CTRLA.reg & TC_CTRLA_ENABLE) > 0u)
-    {
-        TC4->COUNT32.CTRLA.reg &= ~TC_CTRLA_ENABLE;
-        timer_was_running = true;
-    }
-
-    // Set new period
-    TC4->COUNT32.CC[0].reg = (TRUE_CORE_CLOCK_HZ * 60UL) / bpm;
-
-    while (_tc4_syncing());
-
-    if (timer_was_running)
-    {
-        // Re-start timer/counter
-        TC4->COUNT32.CTRLA.reg |= TC_CTRLA_ENABLE;
-        while (_tc4_syncing());
-    }
 }
 
 // Display "no more room for presets" message and wait 2s
@@ -1015,6 +1015,10 @@ static void _state_transition(metronome_state_e new_state)
             break;
     }
     LOG_INFO("changing to state '%s'", statename);
+
+#if !ENABLE_UART_LOGGING
+    (void) statename;
+#endif // !ENABLE_UART_LOGGING
 
     // Stop metronome timer/counter
     _stop_metronome();
@@ -1269,6 +1273,10 @@ static bool _handle_edit_delete_menu_inputs(void)
         _buttons[BUTTON_SELECT].unhandled_press = false;
     }
 
+#if !ENABLE_UART_LOGGING
+    (void) options;
+#endif // !ENABLE_UART_LOGGING
+
     return lcd_update_required;
 }
 
@@ -1325,6 +1333,10 @@ static bool _handle_preset_delete_inputs(void)
         _buttons[BUTTON_SELECT].unhandled_press = false;
         lcd_update_required = true;
     }
+
+#if !ENABLE_UART_LOGGING
+    (void) options;
+#endif // !ENABLE_UART_LOGGING
 
     return lcd_update_required;
 }
