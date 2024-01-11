@@ -9,7 +9,7 @@
 
 
 // If 0, no logging messages will be sent to the UART
-#define ENABLE_UART_LOGGING      (0u)
+#define ENABLE_UART_LOGGING      (1u)
 
 // If 0, CLI interface will not be available
 #define ENABLE_UART_CLI          (1u)
