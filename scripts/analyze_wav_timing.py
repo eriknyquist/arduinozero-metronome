@@ -147,14 +147,13 @@ def main():
 
     max_deviation_percent = abs(max_deviation) / (target_beat_time / 100.0)
     avg_bpm = 60000.0 / avg_beat_time
-    target_bpm = 60000.0 / target_beat_time
     worst_beat_bpm = 60000.0 / worst_beat_time
 
     print("\n\nRESULTS:")
-    print(f"\n{len(beats)} beats found")
+    print(f"\n{len(beats) + 1} beats found")
     print(f"\nAverage beat time: {avg_beat_time:.4f}ms ({avg_bpm:.4f} BPM)")
     print(f"\nWorst beat: {worst_beat_time:.4f}ms ({worst_beat_bpm:.4f} BPM)")
-    print(f"Worst beat deviation from {target_desc} beat time: {abs(deviation):.4f}ms ({max_deviation_percent:.4f}%)")
+    print(f"Worst beat deviation from {target_desc} beat time: {abs(max_deviation):.4f}ms ({max_deviation_percent:.4f}%)")
     print(f"Worst beat position: {worst_beat_number + 1} of {len(beat_times)}\n")
 
     if args.output_wav is not None:
