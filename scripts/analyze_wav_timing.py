@@ -109,10 +109,12 @@ def main():
 
         beats = get_beat_times(wav, threshold=args.volume_trigger)
 
-    if len(beats) <= 1:
-        print(f"\nError: need at least 2 beats ({len(beats)} found)\n")
+    if len(beats) <= 2:
+        print(f"\nError: need at least 3 beats ({len(beats)} found)\n")
         return -1
 
+    # throw away the first beat
+    beats.pop(0)
     beats_ms = [b / (rate / 1000.0) for b in beats]
 
     beat_times = []
