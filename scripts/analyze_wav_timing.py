@@ -7,10 +7,33 @@ LOW_TRIGGER = 0.02
 HIGH_TRIGGER = 0.1
 
 
+class BufferedWavReader(object):
+    def __init__(self, wav, buffersize=512):
+        self.wav = wav
+        self.framesize = 2 if self.wav.getnchannels() == 1 else 4
+        self.max_bufsize = buffersize
+        self.bufsize = buffersize
+        self.buf = b''
+        self.frameindex = buffersize
+
+    def readframe(self):
+        if self.frameindex >= self.bufsize:
+            self.buf = self.wav.readframes(self.max_bufsize)
+            self.bufsize = len(self.buf) / self.framesize
+            self.frameindex = 0
+
+        lower = self.frameindex * self.framesize
+        upper = lower + 2
+        ret = struct.unpack('<h', self.buf[lower:upper])[0]
+        self.frameindex += 1
+        return ret
+
+
 def get_beat_times(wav, threshold=40000000, time_constant=0.05):
     length = wav.getnframes()
     samplerate = wav.getframerate()
-    #threshold *= (65536.0 * 65536.0)
+
+    reader = BufferedWavReader(wav)
 
     # Our result will be a list of (time, is_loud) giving the times when
     # when the audio switches from loud to quiet and back.
@@ -26,7 +49,7 @@ def get_beat_times(wav, threshold=40000000, time_constant=0.05):
     alpha = 1.0 / (time_constant * float(samplerate))
 
     for i in range(length):
-        sample = struct.unpack('<h', wav.readframes(1)[:2])[0]
+        sample = reader.readframe()
 
         # mean is the average value of sample
         mean = (1.0 - alpha) * mean + alpha * sample
@@ -98,8 +121,10 @@ def main():
         width = wav.getsampwidth()
         rate = wav.getframerate()
         frames = wav.getnframes()
-        if width != 2:
-            print("\nError: only 16-bit .wav files are supported\n")
+
+        if (width != 2) or (chans not in [1, 2]):
+            print("\nError: only 16-bit .wav files with one channel (mono) or two "
+                  "channels (stereo) are supported\n")
             return -1
 
         target_desc = f"{args.target_bpm:.4f}" if args.target_bpm else "Unset, will use average"
