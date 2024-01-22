@@ -33,6 +33,43 @@ def buffer_amplitude(buf):
 
     return sample_sum / 32767 / n_highest
 
+def get_beat_times(wav, threshold=0.02, time_constant=0.05):
+    length = wav.getnframes()
+    samplerate = wav.getframerate()
+    threshold *= (65536.0 * 65536.0)
+
+    # Our result will be a list of (time, is_loud) giving the times when
+    # when the audio switches from loud to quiet and back.
+    is_loud = False
+    result = []
+
+    # The following values track the mean and variance of the signal.
+    # When the variance is large, the audio is loud.
+    mean = 0.0
+    variance = 0.0
+
+    # If alpha is small, mean and variance change slower but are less noisy.
+    alpha = 1.0 / (time_constant * float(samplerate))
+
+    for i in range(length):
+        sample = struct.unpack('<h', wav.readframes(1)[:2])[0]
+
+        # mean is the average value of sample
+        mean = (1.0 - alpha) * mean + alpha * sample
+
+        # variance is the average value of (sample - mean) ** 2
+        variance = (1.0 - alpha) * variance + alpha * (sample - mean) ** 2
+
+        # check if we're loud, and record the time if this changes
+        new_is_loud = variance > threshold
+        if new_is_loud and (not is_loud):
+            sample_time = float(i) / (samplerate / 1000.0)
+            result.append(sample_time)
+
+        is_loud = new_is_loud
+
+    return result
+
 def main():
     parser = argparse.ArgumentParser(description='metronome accuracy tester. Analyzes beats/clicks '
                                      'in a .wav file and prints information about BPM, accuracy, and deviation. '
@@ -65,27 +102,7 @@ def main():
             return -1
 
         print(f"{chans} channels, {width * 8} bit samples, {rate} frames per sec, {frames} frames total")
-
-        sample_pos = 0
-        last_amp = 1.0
-
-        while True:
-            buf = read_buffer(wav, args.block_size)
-            if len(buf) < args.block_size:
-                # Discard partial window at the end
-                break
-
-            amp = buffer_amplitude(buf)
-            #sys.stdout.write('.' * int(amp * 100))
-            if (last_amp < args.low_trigger) and ((amp - last_amp) >= args.high_trigger):
-                # If amplitude rose by 0.15 or more, consider this a beat
-                beats.append(sample_pos / (rate / 1000.0))
-                #sys.stdout.write(' <-- beat')
-
-            #sys.stdout.write('\n')
-            #sys.stdout.flush()
-            last_amp = amp
-            sample_pos += args.block_size
+        beats = get_beat_times(wav)
 
     print(f"{len(beats)} beats found")
     if len(beats) <= 1:
