@@ -301,8 +301,8 @@ The Arduino Zero metronome is measurably worse than the Korg TM-60 when it comes
 to accuracy & consistency, however the error factor for the Arduino Zero metronome
 is still quite small, and still makes for a very usable metronome.
 
-Korg TM-60 worst-case beat time deviation from average: **0.0471 milliseconds**
-Arduino Zero worst-case beat time deviation from average: **0.2061 milliseconds**
+* *Korg TM-60 worst-case beat time deviation from average*: **0.0471 milliseconds**
+* *Arduino Zero worst-case beat time deviation from average*: **0.2061 milliseconds**
 
 Korg TM-60 accuracy test results
 ################################
