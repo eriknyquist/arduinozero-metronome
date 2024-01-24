@@ -282,3 +282,35 @@ NOTE: After loading a preset, whenever you want to power off the metronome, it i
 to power off the metronome via the toggle switch, OR via the CLI 'off' command. If power is
 removed unexpectedly, then the preset you just created will not be saved.
 
+Timing/accuracy analysis
+========================
+
+The timing accuracy & consistency of the Arduino Zero metronome was compared to that
+of the `Korg TM-60 metronome <https://www.korg.com/us/products/tuners/tm_60/>`_, using the following
+method for each metronome:
+
+* Record 60 seconds of a 250BPM click, using the 3.5mm audio socket
+* Analyze recorded audio using the ``scripts/analyze_wav_timing.py`` script
+
+(.wav files used for test can be found in ``scripts/timing_test_samples``)
+
+Summary of results
+##################
+
+The Arduino Zero metronome is measurably worse than the Korg TM-60 when it comes
+to accuracy & consistency, however the error factor for the Arduino Zero metronome
+is still quite small, and still makes for a very usable metronome.
+
+Korg TM-60 worst-case beat time deviation from average: **0.0471 milliseconds**
+Arduino Zero worst-case beat time deviation from average: **0.2061 milliseconds**
+
+Korg TM-60 accuracy test results
+################################
+
+.. image:: images/timing_test_korg.png
+
+Arduino Zero accuracy test results
+##################################
+
+.. image:: images/timing_test_arduino.png
+
