@@ -103,6 +103,8 @@ def main():
                         'contain the same number of samples as the input .wav file, and will have loud pulses at the point '
                         'where each beat was detected. This allows easier visualization of when beats are being detected, '
                         'by (for example) opening both .wav files in Audacity and comparing them.')
+    parser.add_argument('-g', '--draw-bargraph', action='store_true', help='Display a bar graph (via matplotlib) that shows '
+                        'the measured time between each beat on the X-axis, for easier visual inspection of the measurement results.')
     parser.add_argument('-t', '--target-bpm', default=None, type=int, help='Target/expected BPM of the input .wav file. '
                         'If unset, then the average BPM detected in the input .wav file will be used as the target \ '
                         'expected BPM.')
@@ -130,7 +132,7 @@ def main():
         target_desc = f"{args.target_bpm:.4f}" if args.target_bpm else "Unset, will use average"
         print(f"\nTarget BPM: {target_desc}")
 
-        print(f"\n{args.filename}: {chans} channels, {width * 8} bit samples, {rate} frames per sec, {frames} frames total")
+        print(f"\n{args.filename}: {chans} channel(s), {width * 8} bit, {rate} frames / sec, {frames} frames total")
 
         beats = get_beat_times(wav, threshold=args.volume_trigger)
 
@@ -183,6 +185,22 @@ def main():
 
     if args.output_wav is not None:
         create_output_wav(args.output_wav, frames, rate, beats)
+
+    if args.draw_bargraph:
+        # Only import matplotlib if we need it, so that other script features
+        # can still be used without installing matplotlib
+        import matplotlib.pyplot as plt
+        fig = plt.figure()
+        plt.bar(range(len(beat_times)), beat_times, color='blue')
+        plt.xlabel("Beat number")
+        plt.ylabel("Beat time (milliseconds)")
+        plt.title(args.filename +
+                  f"\nAverage beat time: {avg_beat_time:.4f}ms ({avg_bpm:.4f} BPM)" +
+                  f"\nWorst beat: {worst_beat_time:.4f}ms ({worst_beat_bpm:.4f} BPM)" +
+                  f"\n Worst beat deviation from {target_desc} beat time: " +
+                  f"{abs(max_deviation):.4f}ms ({max_deviation_percent:.4f}%)")
+        plt.grid(color = 'green', linestyle = '--', linewidth = 0.5)
+        plt.show()
 
     return 0
 
