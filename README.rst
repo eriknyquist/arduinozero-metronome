@@ -286,10 +286,13 @@ Timing/accuracy analysis
 ========================
 
 The timing accuracy & consistency of the Arduino Zero metronome was compared to that
-of the `Korg TM-60 metronome <https://www.korg.com/us/products/tuners/tm_60/>`_, using the following
-method for each metronome:
+of the `Korg TM-60 metronome <https://www.korg.com/us/products/tuners/tm_60/>`_, and the
+`most popular android metronome app <https://play.google.com/store/apps/details?id=com.andymstone.metronome&hl=en_US&gl=US&pli=1>`_
+using the following method for each metronome:
 
-* Record 60 seconds of a 250BPM click, using the 3.5mm audio socket
+* Record 60 seconds of a 250BPM click, using the 3.5mm audio socket (or, in the case of the android
+  app, playing on a Pixel 6a and being recorded by a microphone connected to the same
+  audio interface used to record the other metronomes).
 * Analyze recorded audio using the ``scripts/analyze_wav_timing.py`` script
 
 (.wav files used for test can be found in ``scripts/timing_test_samples``)
@@ -297,12 +300,17 @@ method for each metronome:
 Summary of results
 ##################
 
-The Arduino Zero metronome is measurably worse than the Korg TM-60 when it comes
-to accuracy & consistency, however the error factor for the Arduino Zero metronome
-is still quite small, and still makes for a very usable metronome.
+The Arduino Zero metronome is measurably worse than the Korg TM-60, and measurably better
+than the Android app, when it comes to accuracy & consistency. However the error factor for
+the Arduino Zero metronome is still quite small, and still makes for a very usable metronome.
+
+It is worth noting that the overall timing jitter for all 3 tested metronomes is still well below
+1 millisecond, so all 3 metronomes are still perfectly usable in this regard. The full span of the Y
+axes in the graphs below is only 4 milliseconds.
 
 * *Korg TM-60 worst-case deviation from average beat time*: **0.0471 milliseconds (0.0196% of average beat time)**
 * *Arduino Zero worst-case deviation from average beat time*: **0.2061 milliseconds (0.0859% of average beat time)**
+* *Android "Metronome Beats" app worst-case deviation from average beat time*: **0.4471 milliseconds (0.1863% of average beat time)**
 
 Korg TM-60 accuracy test results
 ################################
@@ -314,3 +322,7 @@ Arduino Zero accuracy test results
 
 .. image:: images/timing_test_arduino.png
 
+Android "Metronome Beats" app accuracy test results
+###################################################
+
+.. image:: images/timing_test_android.png
